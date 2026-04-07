@@ -8,6 +8,7 @@ Uses CUDA (RTX 3080) by default for fast inference.
 import os
 import sys
 import site
+import threading
 import numpy as np
 
 # Add NVIDIA CUDA DLL directories to PATH before ctranslate2 loads.
@@ -25,7 +26,7 @@ if sys.platform == "win32":
                     os.add_dll_directory(_bin)
 
 from faster_whisper import WhisperModel
-from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, SAMPLE_RATE
+from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, SAMPLE_RATE, TRANSCRIPTION_TIMEOUT
 
 # Module-level model instance (loaded once, reused)
 _model: WhisperModel = None
@@ -70,12 +71,32 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
     print("[Aria] Transcribing...")
-    segments, info = model.transcribe(
-        audio_array,
-        beam_size=5,
-        language="en",
-        vad_filter=True,  # Filter out non-speech segments
-    )
+
+    # Run transcription with a timeout to prevent hangs
+    result_holder = [None, None]
+
+    def _run_transcribe():
+        try:
+            result_holder[0], result_holder[1] = model.transcribe(
+                audio_array,
+                beam_size=5,
+                language="en",
+                vad_filter=True,
+            )
+        except Exception as e:
+            print(f"[Aria] Whisper error: {e}")
+
+    t = threading.Thread(target=_run_transcribe, daemon=True)
+    t.start()
+    t.join(timeout=TRANSCRIPTION_TIMEOUT)
+
+    if t.is_alive():
+        print(f"[Aria] Transcription timed out after {TRANSCRIPTION_TIMEOUT}s.")
+        return ""
+
+    segments, info = result_holder
+    if segments is None:
+        return ""
 
     # Collect all segment texts
     full_text = " ".join(segment.text.strip() for segment in segments)

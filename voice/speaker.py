@@ -14,7 +14,7 @@ import time
 import numpy as np
 from piper import PiperVoice
 from piper.config import SynthesisConfig
-from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE
+from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE, MAX_SPEAK_LENGTH
 
 
 # Module-level voice instance (loaded once, reused)
@@ -47,6 +47,11 @@ def speak(text: str) -> None:
     if not text:
         return
 
+    # Truncate excessively long responses to protect TTS performance
+    if len(text) > MAX_SPEAK_LENGTH:
+        text = text[:MAX_SPEAK_LENGTH].rsplit(" ", 1)[0] + "..."
+        print(f"[Aria] Response truncated to {MAX_SPEAK_LENGTH} chars for TTS.")
+
     # Update avatar state (imported here to avoid circular imports)
     try:
         from avatar.renderer import set_speaking, set_idle, set_amplitude
@@ -54,7 +59,10 @@ def speak(text: str) -> None:
     except ImportError:
         set_speaking = set_idle = set_amplitude = None
 
-    _speak_sync(text)
+    try:
+        _speak_sync(text)
+    except Exception as e:
+        print(f"[Aria] TTS error: {e}")
 
     try:
         from avatar.renderer import set_idle, set_amplitude
@@ -79,7 +87,8 @@ def _speak_sync(text: str) -> None:
 
     # Generate speech audio to a temp WAV file
     syn_config = SynthesisConfig(length_scale=PIPER_SPEAKING_RATE)
-    tmp_path = os.path.join(tempfile.gettempdir(), "aria_speech.wav")
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="aria_speech_")
+    os.close(tmp_fd)  # Close the OS-level file descriptor before wave opens it
     with wave.open(tmp_path, "wb") as wf:
         voice.synthesize_wav(text, wf, syn_config=syn_config)
 
@@ -128,3 +137,9 @@ def _speak_sync(text: str) -> None:
         set_amplitude(0.0)
 
     pygame.mixer.music.unload()
+
+    # Clean up temp file
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass

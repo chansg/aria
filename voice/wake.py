@@ -54,7 +54,11 @@ def listen_for_wake_word(
         True when the wake word is detected. False if interrupted
         by stop_event or an error.
     """
-    audio = pyaudio.PyAudio()
+    try:
+        audio = pyaudio.PyAudio()
+    except Exception as e:
+        print(f"[Aria] Failed to initialise PyAudio for wake word: {e}")
+        return False
 
     stream_kwargs = {
         "format": pyaudio.paInt16,
@@ -66,7 +70,13 @@ def listen_for_wake_word(
     if device_index is not None:
         stream_kwargs["input_device_index"] = device_index
 
-    stream = audio.open(**stream_kwargs)
+    try:
+        stream = audio.open(**stream_kwargs)
+    except Exception as e:
+        print(f"[Aria] Failed to open audio stream for wake word: {e}")
+        audio.terminate()
+        return False
+
     chunks_for_silence = int(WAKE_SILENCE_SECS * SAMPLE_RATE / CHUNK_SIZE)
 
     try:

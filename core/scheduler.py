@@ -6,6 +6,7 @@ Events are stored in calendar.db (SQLite) so they survive restarts.
 When a reminder fires, Aria announces it aloud.
 """
 
+import re
 import sqlite3
 import os
 from datetime import datetime, timedelta
@@ -92,8 +93,9 @@ def add_reminder(title: str, remind_at: datetime, description: str = "") -> str:
     conn.commit()
     conn.close()
 
-    # Schedule the APScheduler job
-    job_id = f"reminder_{title}_{remind_at.timestamp()}"
+    # Schedule the APScheduler job (sanitize title for safe job ID)
+    safe_title = re.sub(r"[^a-zA-Z0-9_-]", "_", title)[:50]
+    job_id = f"reminder_{safe_title}_{int(remind_at.timestamp())}"
     _scheduler.add_job(
         _fire_reminder,
         "date",
