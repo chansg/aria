@@ -5,7 +5,6 @@ Desktop overlay using pygame with two rendering modes:
 
   Transparent mode (AVATAR_USE_TRANSPARENT_BG = True):
     Win32 colour-key transparency — magenta pixels become invisible.
-    Click-through everywhere except the mode toggle button.
 
   Dark-card mode (AVATAR_USE_TRANSPARENT_BG = False):
     Solid dark background with window-level alpha transparency.
@@ -62,13 +61,21 @@ WS_EX_TOPMOST = 0x00000008
 WS_EX_TOOLWINDOW = 0x00000080
 LWA_COLORKEY = 0x00000001
 LWA_ALPHA = 0x00000002
-HWND_TOPMOST = -1
+HWND_TOPMOST = ctypes.wintypes.HWND(-1)
 SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOACTIVATE = 0x0010
-WM_NCHITTEST = 0x0084
-HTTRANSPARENT = -1
-HTCLIENT = 1
+SWP_SHOWWINDOW = 0x0040
+
+# Fallback sprite colours per state (used when no PNGs are available)
+FALLBACK_COLOURS = {
+    "idle":   (32, 178, 170),    # Teal
+    "talk_1": (91, 158, 255),    # Blue
+    "talk_2": (70, 130, 220),    # Darker blue
+    "blink":  (32, 150, 150),    # Muted teal
+    "sleep":  (100, 100, 120),   # Grey
+    "wake":   (95, 224, 122),    # Green
+}
 
 
 def _hex_to_rgb(hex_colour: str) -> tuple:
@@ -84,38 +91,112 @@ def _hex_to_rgb(hex_colour: str) -> tuple:
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def _setup_layered_window(hwnd: int, use_transparent_bg: bool) -> None:
+def _setup_layered_window(hwnd: int, use_transparent_bg: bool) -> bool:
     """Configure Win32 layered window for transparency.
 
     Args:
         hwnd: The window handle.
         use_transparent_bg: If True, uses colour-key transparency.
                            If False, uses window-level alpha.
+
+    Returns:
+        True if all Win32 calls succeeded, False otherwise.
     """
     user32 = ctypes.windll.user32
+    hwnd_handle = ctypes.wintypes.HWND(hwnd)
 
     # Add layered + toolwindow (hide from taskbar)
-    ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    print("[Aria] DEBUG: Setting WS_EX_LAYERED | WS_EX_TOOLWINDOW...")
+    ex_style = user32.GetWindowLongW(hwnd_handle, GWL_EXSTYLE)
     ex_style |= WS_EX_LAYERED | WS_EX_TOOLWINDOW
-    # NOTE: We do NOT add WS_EX_TRANSPARENT — the window needs to
-    # receive mouse clicks for the toggle button.
-    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
+    result = user32.SetWindowLongW(hwnd_handle, GWL_EXSTYLE, ex_style)
+    if result == 0:
+        error = ctypes.get_last_error()
+        print(f"[Aria] WARNING: SetWindowLongW failed (error={error})")
 
     if use_transparent_bg:
         # Colour-key: magenta pixels become invisible
         colorref = COLORKEY[0] | (COLORKEY[1] << 8) | (COLORKEY[2] << 16)
-        user32.SetLayeredWindowAttributes(hwnd, colorref, 255, LWA_COLORKEY)
+        print(f"[Aria] DEBUG: Setting colour-key transparency (colorref={colorref:#x})...")
+        ok = user32.SetLayeredWindowAttributes(
+            hwnd_handle, ctypes.wintypes.COLORREF(colorref), 255,
+            LWA_COLORKEY,
+        )
+        if not ok:
+            print(f"[Aria] WARNING: SetLayeredWindowAttributes (colorkey) failed")
+            return False
     else:
         # Window-level alpha: entire window is semi-transparent
         alpha = int(AVATAR_ALPHA * 255)
-        user32.SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA)
+        print(f"[Aria] DEBUG: Setting window alpha={alpha}/255...")
+        ok = user32.SetLayeredWindowAttributes(
+            hwnd_handle, 0, alpha, LWA_ALPHA,
+        )
+        if not ok:
+            print(f"[Aria] WARNING: SetLayeredWindowAttributes (alpha) failed")
+            return False
 
-    # Force always-on-top
-    user32.SetWindowPos(
-        hwnd, HWND_TOPMOST,
+    # Force always-on-top and ensure window is shown
+    print("[Aria] DEBUG: Setting HWND_TOPMOST + SWP_SHOWWINDOW...")
+    ok = user32.SetWindowPos(
+        hwnd_handle, HWND_TOPMOST,
         0, 0, 0, 0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
     )
+    if not ok:
+        print(f"[Aria] WARNING: SetWindowPos (topmost) failed")
+        return False
+
+    print("[Aria] DEBUG: Win32 transparency setup complete.")
+    return True
+
+
+def _generate_fallback_sprites(bg_colour: tuple) -> dict:
+    """Generate simple coloured-circle placeholder sprites.
+
+    Called when no PNG sprite files are found. Ensures the avatar
+    always displays something visible so the window can be confirmed
+    working.
+
+    Args:
+        bg_colour: The (R, G, B) background fill colour.
+
+    Returns:
+        Dict of {name: pygame.Surface} for all 6 sprite slots.
+    """
+    print("[Aria] Generating fallback placeholder sprites...")
+    sprites = {}
+
+    try:
+        label_font = pygame.font.SysFont("Segoe UI", 14, bold=True)
+    except Exception:
+        label_font = pygame.font.Font(None, 18)
+
+    labels = {
+        "idle": "IDLE", "talk_1": "TALK", "talk_2": "TALK",
+        "blink": "BLINK", "sleep": "SLEEP", "wake": "WAKE",
+    }
+
+    for name, colour in FALLBACK_COLOURS.items():
+        surf = pygame.Surface((AVATAR_SIZE, AVATAR_SIZE))
+        surf.fill(bg_colour)
+        cx, cy = AVATAR_SIZE // 2, AVATAR_SIZE // 2
+
+        # Draw a coloured circle as the "avatar"
+        pygame.draw.circle(surf, colour, (cx, cy), 70)
+        # Dark outline
+        pygame.draw.circle(surf, (20, 20, 20), (cx, cy), 70, 3)
+
+        # State label inside the circle
+        label = labels.get(name, name.upper())
+        label_surf = label_font.render(label, True, (255, 255, 255))
+        label_rect = label_surf.get_rect(center=(cx, cy))
+        surf.blit(label_surf, label_rect)
+
+        sprites[name] = surf
+
+    print(f"[Aria] Generated {len(sprites)} fallback sprites.")
+    return sprites
 
 
 class AvatarWindow:
@@ -147,51 +228,77 @@ class AvatarWindow:
         """Create and configure the pygame window.
 
         Loads sprites, positions the window in the bottom-right corner,
-        and applies Win32 transparency settings.
+        and applies Win32 transparency settings. Falls back to placeholder
+        sprites if PNGs are missing.
         Must be called from the main thread.
         """
         pos_str = self._bottom_right_pos()
         os.environ["SDL_VIDEO_WINDOW_POS"] = pos_str
-        pygame.init()
+        print(f"[Aria] DEBUG: SDL_VIDEO_WINDOW_POS = {pos_str}")
 
+        print("[Aria] DEBUG: Initialising pygame...")
+        pygame.init()
+        print(f"[Aria] DEBUG: pygame.init() complete — display driver: {pygame.display.get_driver()}")
+
+        print(f"[Aria] DEBUG: Creating {AVATAR_SIZE}x{AVATAR_SIZE} NOFRAME window...")
         self.screen = pygame.display.set_mode(
             (AVATAR_SIZE, AVATAR_SIZE),
-            pygame.NOFRAME,
+            pygame.NOFRAME | pygame.SHOWN,
         )
         pygame.display.set_caption("Aria")
         self.clock = pygame.time.Clock()
+        print(f"[Aria] DEBUG: Display surface created: {self.screen.get_size()}")
 
         # Get Win32 window handle and apply transparency
         info = pygame.display.get_wm_info()
         self.hwnd = info.get("window")
+        print(f"[Aria] DEBUG: Win32 HWND = {self.hwnd}")
 
         if self.hwnd:
-            _setup_layered_window(self.hwnd, AVATAR_USE_TRANSPARENT_BG)
+            ok = _setup_layered_window(self.hwnd, AVATAR_USE_TRANSPARENT_BG)
+            if not ok:
+                print("[Aria] WARNING: Win32 transparency setup had failures — "
+                      "avatar may not render correctly.")
+        else:
+            print("[Aria] WARNING: Could not get Win32 HWND — "
+                  "transparency and always-on-top will not work.")
 
-        # Load and prepare sprites
+        # Load sprites (PNG files or fallback placeholders)
         self._load_sprites()
 
         self._running = True
 
-        # Parse position for logging
+        # Report final position
         parts = pos_str.split(",")
         user32 = ctypes.windll.user32
         sw = user32.GetSystemMetrics(0)
         sh = user32.GetSystemMetrics(1)
         print(f"[Aria] Avatar window created at +{parts[0]}+{parts[1]} "
-              f"(screen: {sw}x{sh})")
+              f"(screen: {sw}x{sh}, mode: "
+              f"{'transparent' if AVATAR_USE_TRANSPARENT_BG else 'dark-card'})")
 
     def _bottom_right_pos(self) -> str:
-        """Calculate the bottom-right screen position string for SDL.
+        """Calculate the bottom-right screen position above the taskbar.
+
+        Uses SPI_GETWORKAREA to get the usable screen area (excluding
+        the taskbar), ensuring the avatar is never hidden behind it.
 
         Returns:
             Position string in 'x,y' format for SDL_VIDEO_WINDOW_POS.
         """
         user32 = ctypes.windll.user32
-        screen_w = user32.GetSystemMetrics(0)
-        screen_h = user32.GetSystemMetrics(1)
-        x = screen_w - AVATAR_SIZE - PADDING
-        y = screen_h - AVATAR_SIZE - PADDING - 50
+
+        # Get work area (screen minus taskbar)
+        work_area = ctypes.wintypes.RECT()
+        user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work_area), 0)
+        work_w = work_area.right - work_area.left
+        work_h = work_area.bottom - work_area.top
+
+        x = work_area.left + work_w - AVATAR_SIZE - PADDING
+        y = work_area.top + work_h - AVATAR_SIZE - PADDING
+
+        print(f"[Aria] DEBUG: Work area: {work_w}x{work_h} "
+              f"(top-left: {work_area.left},{work_area.top})")
         return f"{x},{y}"
 
     def _load_sprites(self) -> None:
@@ -199,8 +306,8 @@ class AvatarWindow:
 
         Each sprite is pre-composited onto the background colour so that
         RGBA transparency renders correctly on the non-alpha display
-        surface. This avoids the 'invisible sprite' issue where
-        convert_alpha() onto a non-SRCALPHA screen drops the alpha channel.
+        surface. If any sprites are missing, generates coloured-circle
+        fallback placeholders.
         """
         from config import ASSETS_DIR
 
@@ -214,6 +321,8 @@ class AvatarWindow:
             "wake": "aria_wake.png",
         }
 
+        print(f"[Aria] DEBUG: Loading sprites from {sprite_dir}...")
+
         for name, filename in sprite_files.items():
             path = os.path.join(sprite_dir, filename)
             if os.path.exists(path):
@@ -225,13 +334,24 @@ class AvatarWindow:
                     composited.fill(self._bg_colour)
                     composited.blit(raw_surf, (0, 0))
                     self._sprites[name] = composited
+                    print(f"[Aria] DEBUG: Loaded {filename} ({raw_surf.get_size()})")
                 except Exception as e:
                     print(f"[Aria] WARNING: Failed to load {filename}: {e}")
             else:
                 print(f"[Aria] WARNING: Missing sprite: {filename}")
 
         if not self._sprites:
-            print("[Aria] WARNING: Sprites failed to load — using fallback renderer.")
+            # No sprites loaded at all — generate fallback placeholders
+            print("[Aria] WARNING: No sprite PNGs found — generating fallback placeholders.")
+            self._sprites = _generate_fallback_sprites(self._bg_colour)
+        elif len(self._sprites) < 6:
+            # Some sprites loaded, fill gaps with fallback
+            fallbacks = _generate_fallback_sprites(self._bg_colour)
+            for name in sprite_files:
+                if name not in self._sprites:
+                    self._sprites[name] = fallbacks[name]
+                    print(f"[Aria] DEBUG: Using fallback for missing sprite: {name}")
+            print(f"[Aria] Loaded {len(self._sprites)} sprites (some fallback).")
         else:
             print(f"[Aria] Loaded {len(self._sprites)} sprites.")
 
@@ -295,15 +415,7 @@ class AvatarWindow:
         self._press_pos = (event.pos[0], event.pos[1])
         self._dragging = True
         if self.hwnd:
-            # Get current window position for drag offset
-            rect = ctypes.wintypes.RECT()
-            ctypes.windll.user32.GetWindowRect(self.hwnd, ctypes.byref(rect))
-            mouse_screen = pygame.mouse.get_pos()
-            self._drag_offset = (
-                event.pos[0],
-                event.pos[1],
-            )
-            self._drag_origin = (rect.left, rect.top)
+            self._drag_offset = (event.pos[0], event.pos[1])
 
     def _on_release(self, event) -> None:
         """Handle mouse button release — detect click vs drag.
@@ -332,11 +444,12 @@ class AvatarWindow:
         cursor = ctypes.wintypes.POINT()
         ctypes.windll.user32.GetCursorPos(ctypes.byref(cursor))
 
+        hwnd_handle = ctypes.wintypes.HWND(self.hwnd)
         new_x = cursor.x - self._drag_offset[0]
         new_y = cursor.y - self._drag_offset[1]
 
         ctypes.windll.user32.SetWindowPos(
-            self.hwnd, HWND_TOPMOST,
+            hwnd_handle, HWND_TOPMOST,
             new_x, new_y, 0, 0,
             SWP_NOSIZE | SWP_NOACTIVATE,
         )
@@ -362,32 +475,32 @@ class AvatarWindow:
         # Clear with background colour
         self.screen.fill(self._bg_colour)
 
-        # Select the sprite to display
+        # Select the sprite to display (always returns a surface now —
+        # fallback sprites guarantee we never get None)
         sprite = self._select_sprite()
-        if sprite is None:
-            self._draw_toggle_button()
-            pygame.display.flip()
-            return
+        if sprite is not None:
+            # Calculate position with animation offsets
+            x, y = 0, 0
+            cx = AVATAR_SIZE // 2
+            cy = AVATAR_SIZE // 2
 
-        # Calculate position with animation offsets
-        x, y = 0, 0
+            # State-based position offsets
+            if self._state == STATE_LISTENING:
+                y += int(self._anim.bounce_offset())
+            elif self._state == STATE_IDLE:
+                scale = self._anim.breathing_scale()
+                if abs(scale - 1.0) > 0.005:
+                    new_w = int(AVATAR_SIZE * scale)
+                    new_h = int(AVATAR_SIZE * scale)
+                    sprite = pygame.transform.smoothscale(sprite, (new_w, new_h))
+                    x = (AVATAR_SIZE - new_w) // 2
+                    y = (AVATAR_SIZE - new_h) // 2
+
+            # Draw the sprite
+            self.screen.blit(sprite, (x, y))
+
         cx = AVATAR_SIZE // 2
         cy = AVATAR_SIZE // 2
-
-        # State-based position offsets
-        if self._state == STATE_LISTENING:
-            y += int(self._anim.bounce_offset())
-        elif self._state == STATE_IDLE:
-            scale = self._anim.breathing_scale()
-            if abs(scale - 1.0) > 0.005:
-                new_w = int(AVATAR_SIZE * scale)
-                new_h = int(AVATAR_SIZE * scale)
-                sprite = pygame.transform.smoothscale(sprite, (new_w, new_h))
-                x = (AVATAR_SIZE - new_w) // 2
-                y = (AVATAR_SIZE - new_h) // 2
-
-        # Draw the sprite
-        self.screen.blit(sprite, (x, y))
 
         # Draw glow ring
         self._draw_glow_ring(cx, cy)
@@ -408,7 +521,7 @@ class AvatarWindow:
         """Select the appropriate sprite for the current state and frame.
 
         Returns:
-            The pygame Surface to render, or None if no sprite available.
+            The pygame Surface to render, or None if no sprites loaded.
         """
         if self._state == STATE_DORMANT:
             return self._sprites.get("sleep")
@@ -495,7 +608,6 @@ class AvatarWindow:
 
     def _draw_toggle_button(self) -> None:
         """Draw the conversation mode toggle button in the top-right corner."""
-        # Button background
         if self._mode_on:
             btn_colour = (32, 178, 170)   # Teal = ON
             btn_label = "ON"
@@ -503,12 +615,10 @@ class AvatarWindow:
             btn_colour = (85, 85, 85)     # Grey = OFF
             btn_label = "OFF"
 
-        # Draw rounded-ish button (rect + outline)
         btn_rect = pygame.Rect(BTN_X1, BTN_Y1, BTN_W, BTN_H)
         pygame.draw.rect(self.screen, btn_colour, btn_rect, border_radius=4)
         pygame.draw.rect(self.screen, (255, 255, 255), btn_rect, width=1, border_radius=4)
 
-        # Button label
         try:
             btn_font = pygame.font.SysFont("Segoe UI", 10, bold=True)
         except Exception:
