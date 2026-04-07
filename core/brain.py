@@ -9,6 +9,7 @@ from voice commands.
 """
 
 import json
+import re
 import httpx
 import anthropic
 from datetime import datetime
@@ -20,10 +21,65 @@ from config import (
     COMPLEX_QUERY_KEYWORDS,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
+    MAX_CONVERSATION_TURNS,
 )
 from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
+
+
+# --- Local intent patterns (bypass Claude API entirely) ---
+LOCAL_INTENTS = {
+    "time": {
+        "patterns": [
+            r"\bwhat\s+time\b",
+            r"\bwhat's\s+the\s+time\b",
+            r"\btell\s+me\s+the\s+time\b",
+            r"\bcurrent\s+time\b",
+        ],
+        "handler": lambda _: f"It's {datetime.now().strftime('%H:%M')}, Chan.",
+    },
+    "date": {
+        "patterns": [
+            r"\bwhat\s+date\b",
+            r"\bwhat's\s+the\s+date\b",
+            r"\bwhat\s+day\s+is\s+it\b",
+            r"\btoday's\s+date\b",
+            r"\bcurrent\s+date\b",
+        ],
+        "handler": lambda _: f"It's {datetime.now().strftime('%A, %d %B %Y')}.",
+    },
+    "schedule_check": {
+        "patterns": [
+            r"\bwhat\s+reminders?\b",
+            r"\bshow\s+(my\s+)?reminders?\b",
+            r"\blist\s+(my\s+)?reminders?\b",
+            r"\bmy\s+schedule\b",
+        ],
+        "handler": lambda _: list_reminders(),
+    },
+}
+
+
+def _try_local_intent(user_input: str) -> str | None:
+    """Try to handle the query locally without calling Claude.
+
+    Matches user input against LOCAL_INTENTS patterns. If a match
+    is found, runs the handler and returns the response.
+
+    Args:
+        user_input: The user's message.
+
+    Returns:
+        A response string if matched, or None if no local intent fits.
+    """
+    lowered = user_input.lower()
+    for intent in LOCAL_INTENTS.values():
+        for pattern in intent["patterns"]:
+            if re.search(pattern, lowered):
+                print("[Aria] Handled locally — no API call needed.")
+                return intent["handler"](user_input)
+    return None
 
 
 # --- Tool definitions for Claude ---
@@ -178,9 +234,16 @@ def think(user_input: str) -> str:
     # Store what the user said
     store_episodic("user", user_input)
 
+    # Try local intent first (no API call needed)
+    local_response = _try_local_intent(user_input)
+    if local_response is not None:
+        store_episodic("aria", local_response)
+        record_interaction()
+        return local_response
+
     # Build the full prompt with memory context
     system_prompt = get_system_prompt()
-    memory_context = build_memory_context()
+    memory_context = build_memory_context(max_turns=MAX_CONVERSATION_TURNS)
 
     if memory_context:
         system_prompt += f"\n\n--- Memory ---\n{memory_context}"
@@ -224,7 +287,7 @@ def _think_claude(system_prompt: str, user_input: str) -> str:
         messages = [{"role": "user", "content": user_input}]
         cached_system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
 
-        # First request — may include tool calls
+        # CLAUDE CALL — primary request (may include tool calls)
         response = client.messages.create(
             model=model,
             max_tokens=400,
@@ -254,6 +317,7 @@ def _think_claude(system_prompt: str, user_input: str) -> str:
             messages.append({"role": "assistant", "content": assistant_content})
             messages.append({"role": "user", "content": tool_results})
 
+            # CLAUDE CALL — follow-up after tool execution
             final_response = client.messages.create(
                 model=model,
                 max_tokens=250,

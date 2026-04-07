@@ -121,7 +121,11 @@ def record_audio(device_index: int = None) -> bytes:
     Returns:
         Raw audio bytes (16-bit PCM, mono, 16kHz) suitable for Whisper.
     """
-    audio = pyaudio.PyAudio()
+    try:
+        audio = pyaudio.PyAudio()
+    except Exception as e:
+        print(f"[Aria] Failed to initialise PyAudio: {e}")
+        return b""
 
     stream_kwargs = {
         "format": pyaudio.paInt16,
@@ -133,7 +137,12 @@ def record_audio(device_index: int = None) -> bytes:
     if device_index is not None:
         stream_kwargs["input_device_index"] = device_index
 
-    stream = audio.open(**stream_kwargs)
+    try:
+        stream = audio.open(**stream_kwargs)
+    except Exception as e:
+        print(f"[Aria] Failed to open audio stream: {e}")
+        audio.terminate()
+        return b""
 
     print("[Aria] Listening... speak now.")
 

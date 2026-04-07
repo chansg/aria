@@ -155,11 +155,14 @@ def get_semantic_by_category(category: str) -> list[dict]:
     return [dict(row) for row in cursor.fetchall()]
 
 
-def build_memory_context() -> str:
+def build_memory_context(max_turns: int = 10) -> str:
     """Build a context string from memory for the AI prompt.
 
     Combines semantic facts and recent conversation history into
     a string that can be injected into the system prompt.
+
+    Args:
+        max_turns: Maximum number of recent conversation turns to include.
 
     Returns:
         A formatted memory context string.
@@ -174,8 +177,8 @@ def build_memory_context() -> str:
         for fact in facts:
             parts.append(f"  - {fact['key']}: {fact['value']}")
 
-    # Recent conversation (last 6 turns for context window efficiency)
-    recent = get_recent_episodic(limit=6)
+    # Recent conversation (capped to max_turns for context efficiency)
+    recent = get_recent_episodic(limit=max_turns)
     if recent:
         parts.append("\nRecent conversation:")
         for turn in recent:
