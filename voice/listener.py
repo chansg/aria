@@ -7,6 +7,7 @@ then returns the raw audio data for transcription.
 """
 
 import numpy as np
+import noisereduce as nr
 import pyaudio
 import wave
 import io
@@ -107,6 +108,33 @@ def is_silent(audio_chunk: bytes) -> bool:
     return rms < _silence_threshold
 
 
+def preprocess_audio(audio_bytes: bytes) -> bytes:
+    """Apply noise reduction to raw audio before transcription.
+
+    Reduces background noise and improves Whisper accuracy in home
+    environments. Uses a stationary noise estimation approach.
+
+    Args:
+        audio_bytes: Raw 16-bit PCM audio bytes.
+
+    Returns:
+        Noise-reduced audio as raw bytes.
+    """
+    try:
+        audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+        reduced = nr.reduce_noise(
+            y=audio_data,
+            sr=SAMPLE_RATE,
+            stationary=True,
+            prop_decrease=0.75,
+        )
+        print("[Aria] Noise reduction applied.")
+        return reduced.astype(np.int16).tobytes()
+    except Exception as e:
+        print(f"[Aria] WARNING: Noise reduction failed ({e}), using raw audio.")
+        return audio_bytes
+
+
 def record_audio(device_index: int = None) -> bytes:
     """Record audio from the microphone until silence is detected.
 
@@ -190,7 +218,8 @@ def record_audio(device_index: int = None) -> bytes:
         print(f"[Aria] Too short ({duration:.1f}s < {MIN_RECORDING_DURATION}s) — ignoring.")
         return b""
 
-    return raw_audio
+    # Apply noise reduction before returning
+    return preprocess_audio(raw_audio)
 
 
 def audio_bytes_to_wav(audio_bytes: bytes) -> bytes:

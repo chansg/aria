@@ -28,6 +28,14 @@ if sys.platform == "win32":
 from faster_whisper import WhisperModel
 from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, SAMPLE_RATE, TRANSCRIPTION_TIMEOUT
 
+# Biases Whisper transcription toward Aria's expected vocabulary.
+# Include the name variants and common command words Chan uses.
+WHISPER_INITIAL_PROMPT = (
+    "Aria, hey Aria, weather, temperature, reminder, schedule, "
+    "appointment, time, date, what's, tell me, can you, please, "
+    "Birmingham, morning, evening, today, tomorrow"
+)
+
 # Module-level model instance (loaded once, reused)
 _model: WhisperModel = None
 
@@ -82,6 +90,11 @@ def transcribe_audio(audio_bytes: bytes) -> str:
                 beam_size=5,
                 language="en",
                 vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=200,
+                ),
+                initial_prompt=WHISPER_INITIAL_PROMPT,
             )
         except Exception as e:
             print(f"[Aria] Whisper error: {e}")
