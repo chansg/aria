@@ -38,7 +38,12 @@ from avatar.renderer import (
 from voice.trainer import run_calibration, get_profile_summary
 
 # Name variants Whisper might produce (case-insensitive matching)
-ARIA_VARIANTS = {"aria", "arya", "area", "ariya", "ariia"}
+# Expanded for large-v2 + British accent phonetic variants
+ARIA_VARIANTS = {
+    "aria", "arya", "area", "ariya", "ariia",
+    "ari", "ariah", "aeria", "era", "aaria",
+    "harry", "maria",  # Common misheard variants
+}
 
 # ── Conversation mode flag ─────────────────────────────────────────
 # ON (set)  = always-listening conversation mode
