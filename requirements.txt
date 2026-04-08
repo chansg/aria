@@ -36,3 +36,6 @@ Pillow>=10.0.0
 # Scheduler (reminders and calendar)
 APScheduler>=3.10.0
 SQLAlchemy>=2.0.0
+
+# Web scraping (Phase 4 — live data access)
+playwright>=1.40.0
