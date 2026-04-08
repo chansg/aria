@@ -26,6 +26,7 @@ from config import (
 from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
+from core.web_search import search_web
 
 
 # --- Local intent patterns (bypass Claude API entirely) ---
@@ -57,6 +58,19 @@ LOCAL_INTENTS = {
             r"\bmy\s+schedule\b",
         ],
         "handler": lambda _: list_reminders(),
+    },
+    "weather": {
+        "patterns": [
+            r"\bweather\b",
+            r"\btemperature\b",
+            r"\bforecast\b",
+            r"\braining\b",
+            r"\bsunny\b",
+            r"\bcloudy\b",
+            r"\bhow\s+(cold|warm|hot)\b",
+            r"\bumbrella\b",
+        ],
+        "handler": lambda _: f"Here's the current weather, Chan: {search_web('weather', location='Birmingham')}",
     },
 }
 
