@@ -1,53 +1,68 @@
 """
 Aria Speaker Module
 ===================
-Text-to-speech output using Piper TTS running locally.
+Text-to-speech output using Piper TTS with the hfc_female medium
+ONNX voice model. Runs fully locally with no API calls.
+
 Generates WAV audio via ONNX inference and plays it through
 the default output device using pygame.mixer.
 Integrates with the avatar renderer for speaking state and lip-sync.
 """
 
 import wave
-import tempfile
 import os
 import time
 import numpy as np
-from piper import PiperVoice
-from piper.config import SynthesisConfig
+import pygame
+from piper.voice import PiperVoice
 from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE, MAX_SPEAK_LENGTH
 
+
+# Output WAV path (reused each utterance — overwritten, not accumulated)
+OUTPUT_WAV = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "sounds", "aria_response.wav")
 
 # Module-level voice instance (loaded once, reused)
 _voice: PiperVoice = None
 
 
 def _load_voice() -> PiperVoice:
-    """Load the Piper TTS voice model.
+    """Load and cache the Piper voice model.
 
     Returns:
-        The loaded PiperVoice instance.
+        PiperVoice: Loaded voice instance.
+
+    Raises:
+        FileNotFoundError: If the ONNX model file is missing.
     """
     global _voice
     if _voice is None:
-        print(f"[Aria] Loading Piper TTS model...")
+        if not os.path.exists(PIPER_MODEL_PATH):
+            raise FileNotFoundError(
+                f"[Aria] Voice model not found at {PIPER_MODEL_PATH}. "
+                "Download the hfc_female medium ONNX from HuggingFace "
+                "(rhasspy/piper-voices) into assets/voices/."
+            )
+        print(f"[Aria] Loading voice model: {PIPER_MODEL_PATH}")
         _voice = PiperVoice.load(PIPER_MODEL_PATH)
-        print(f"[Aria] Piper TTS loaded ({_voice.config.sample_rate}Hz).")
+        print(f"[Aria] Voice model loaded ({_voice.config.sample_rate}Hz).")
     return _voice
 
 
 def speak(text: str) -> None:
-    """Convert text to speech and play it aloud.
+    """Synthesise text to speech and play it via pygame.
 
-    Updates the avatar state to 'speaking' during playback with
+    Truncates text exceeding MAX_SPEAK_LENGTH characters.
+    Updates avatar state to 'speaking' during playback with
     amplitude-synced lip movement, then back to 'idle' when finished.
+    Falls back to terminal print if TTS or playback fails.
 
     Args:
-        text: The text for Aria to speak.
+        text: The text string for Aria to speak aloud.
     """
-    if not text:
+    if not text or not text.strip():
         return
 
-    # Truncate excessively long responses to protect TTS performance
+    # Truncate overly long responses
     if len(text) > MAX_SPEAK_LENGTH:
         text = text[:MAX_SPEAK_LENGTH].rsplit(" ", 1)[0] + "..."
         print(f"[Aria] Response truncated to {MAX_SPEAK_LENGTH} chars for TTS.")
@@ -61,8 +76,12 @@ def speak(text: str) -> None:
 
     try:
         _speak_sync(text)
+    except FileNotFoundError as e:
+        print(f"[Aria] ERROR: {e}")
+        print(f"[Aria] (text): {text}")
     except Exception as e:
-        print(f"[Aria] TTS error: {e}")
+        print(f"[Aria] ERROR: TTS failed — {e}")
+        print(f"[Aria] (text): {text}")
 
     try:
         from avatar.renderer import set_idle, set_amplitude
@@ -81,19 +100,17 @@ def _speak_sync(text: str) -> None:
     Args:
         text: The text to speak.
     """
-    import pygame
-
     voice = _load_voice()
 
-    # Generate speech audio to a temp WAV file
-    syn_config = SynthesisConfig(length_scale=PIPER_SPEAKING_RATE)
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="aria_speech_")
-    os.close(tmp_fd)  # Close the OS-level file descriptor before wave opens it
-    with wave.open(tmp_path, "wb") as wf:
-        voice.synthesize_wav(text, wf, syn_config=syn_config)
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(OUTPUT_WAV), exist_ok=True)
+
+    # Synthesise to WAV file (synthesize_wav handles WAV headers)
+    with wave.open(OUTPUT_WAV, "wb") as wav_file:
+        voice.synthesize_wav(text, wav_file)
 
     # Read the WAV data for amplitude analysis
-    with wave.open(tmp_path, "rb") as wf:
+    with wave.open(OUTPUT_WAV, "rb") as wf:
         n_frames = wf.getnframes()
         sample_rate = wf.getframerate()
         raw_data = wf.readframes(n_frames)
@@ -104,7 +121,7 @@ def _speak_sync(text: str) -> None:
     if not pygame.mixer.get_init():
         pygame.mixer.init()
 
-    pygame.mixer.music.load(tmp_path)
+    pygame.mixer.music.load(OUTPUT_WAV)
     pygame.mixer.music.play()
 
     # Feed amplitude to the avatar during playback
@@ -137,9 +154,3 @@ def _speak_sync(text: str) -> None:
         set_amplitude(0.0)
 
     pygame.mixer.music.unload()
-
-    # Clean up temp file
-    try:
-        os.unlink(tmp_path)
-    except OSError:
-        pass

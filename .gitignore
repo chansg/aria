@@ -34,6 +34,10 @@ data/web_cache.json
 # Large model files (re-download, don't commit)
 assets/models/*.onnx
 
+# Piper voice models (large binary — download separately)
+assets/voices/*.onnx
+assets/voices/*.onnx.json
+
 # Audio outputs
 assets/sounds/aria_response.wav
 

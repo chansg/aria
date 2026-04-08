@@ -13,3 +13,8 @@ OPENWEATHER_API_KEY = ""  # Optional — currently using web scraping
 MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
 MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
 TRANSCRIPTION_TIMEOUT = 15    # Seconds before aborting a Whisper transcription
+
+# --- TTS Voice Model ---
+# Download from HuggingFace: rhasspy/piper-voices → en/en_US/hfc_female/medium/
+# Save to: assets/voices/en_US-hfc_female-medium.onnx (and .onnx.json)
+PIPER_MODEL_PATH = "assets/voices/en_US-hfc_female-medium.onnx"
