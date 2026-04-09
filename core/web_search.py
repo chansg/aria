@@ -1,67 +1,181 @@
 """
 Aria Web Search Module
 ======================
-Web scraping module for Aria. Provides live data access via
-Playwright headless browser. Built with a scalable dispatch
-architecture — add new handlers by registering them in HANDLERS.
+General-purpose web search for Aria using DuckDuckGo.
 
-Current handlers:
-    - weather: Scrapes wttr.in for Birmingham weather
+Scrapes the DuckDuckGo HTML endpoint for any natural language query
+and extracts the top result snippets as clean plain text.
 
-Future handlers (not yet implemented):
-    - news
-    - job_listings
-    - general_search
+Results are cached in data/web_cache.json with a 15-minute TTL.
+
+The old weather-only handler is retained but deprecated — weather
+queries now go through the general search_web() path.
 """
 
+import hashlib
 import json
 import os
+import re
 from datetime import datetime, timedelta
+from urllib.parse import quote_plus
+
 from config import DATA_DIR
 
 CACHE_FILE = os.path.join(DATA_DIR, "web_cache.json")
-CACHE_TTL_MINUTES = 30
+CACHE_TTL_MINUTES = 15
+MAX_SNIPPETS = 3
 
 
-# ── Handler registry ────────────────────────────────────────────────
-# To add a new handler:
-#   1. Write a _handle_<name>(**kwargs) function below
-#   2. Add an entry here: "name": _handle_<name>
-# The dispatch function search_web() does the rest.
+# ── Public entry point ────────────────────────────────────────────────
 
-HANDLERS: dict = {}
+def search_web(query: str) -> str:
+    """Search the web for a query using DuckDuckGo and return plain text results.
 
-
-def _register(name: str):
-    """Decorator to register a handler function in HANDLERS.
+    Scrapes the DuckDuckGo HTML endpoint and extracts the top 3 result
+    snippets as clean plain text. Results are cached for 15 minutes.
 
     Args:
-        name: The query type this handler responds to.
-    """
-    def decorator(fn):
-        HANDLERS[name] = fn
-        return fn
-    return decorator
-
-
-def search_web(query_type: str, **kwargs) -> str:
-    """Route a query to the appropriate web handler.
-
-    Args:
-        query_type: The type of query (e.g. 'weather', 'news').
-        **kwargs: Additional arguments passed to the handler.
+        query: Natural language search query from the user.
 
     Returns:
-        A plain-text string result, or an error message if scraping fails.
+        Plain text string containing the top search result snippets,
+        or an error message string if scraping fails.
     """
-    handler = HANDLERS.get(query_type)
-    if not handler:
-        return f"No web handler registered for: {query_type}"
+    cache_key = _cache_key(query)
+    cache = _load_cache()
 
-    return handler(**kwargs)
+    # Return cached result if still valid
+    if cache_key in cache and _is_cache_valid(cache[cache_key]):
+        print(f"[WebSearch] Returning cached result for: {query[:50]}")
+        return cache[cache_key]["result"]
+
+    print(f"[WebSearch] Scraping DuckDuckGo for: {query[:50]}...")
+
+    # Try Playwright first, fall back to httpx
+    try:
+        result = _scrape_ddg_playwright(query)
+    except Exception as e:
+        print(f"[WebSearch] Playwright failed ({e}), falling back to httpx...")
+        try:
+            result = _scrape_ddg_httpx(query)
+        except Exception as e2:
+            print(f"[WebSearch] httpx fallback also failed: {e2}")
+            return f"Sorry Chan, I couldn't find results for that query right now."
+
+    if not result or not result.strip():
+        return "I searched but didn't find any relevant results, Chan."
+
+    # Cache the result
+    cache[cache_key] = {
+        "result": result,
+        "timestamp": datetime.now().isoformat(),
+    }
+    _save_cache(cache)
+
+    return result
 
 
-# ── Cache helpers ───────────────────────────────────────────────────
+# ── DuckDuckGo scrapers ──────────────────────────────────────────────
+
+def _scrape_ddg_playwright(query: str) -> str:
+    """Scrape DuckDuckGo HTML endpoint using Playwright headless browser.
+
+    Args:
+        query: The search query string.
+
+    Returns:
+        Plain text snippets from the top results.
+
+    Raises:
+        Exception: If Playwright fails or no results are found.
+    """
+    from playwright.sync_api import sync_playwright
+    from bs4 import BeautifulSoup
+
+    url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(url, timeout=15000)
+        html = page.content()
+        browser.close()
+
+    return _extract_snippets(html)
+
+
+def _scrape_ddg_httpx(query: str) -> str:
+    """Fallback DuckDuckGo scrape using httpx (no browser).
+
+    Args:
+        query: The search query string.
+
+    Returns:
+        Plain text snippets from the top results.
+
+    Raises:
+        Exception: If the HTTP request fails.
+    """
+    import httpx
+
+    url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+    response = httpx.get(
+        url,
+        timeout=10.0,
+        headers={"User-Agent": "Aria/1.0"},
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    return _extract_snippets(response.text)
+
+
+def _extract_snippets(html: str) -> str:
+    """Extract the top result snippets from DuckDuckGo HTML response.
+
+    Args:
+        html: Raw HTML string from DuckDuckGo.
+
+    Returns:
+        Clean plain text with the top snippets, one per line.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    snippets = []
+
+    # DuckDuckGo HTML results are in <a class="result__snippet"> elements
+    for result in soup.select(".result__snippet")[:MAX_SNIPPETS]:
+        text = result.get_text(strip=True)
+        if text:
+            # Clean up whitespace
+            text = re.sub(r"\s+", " ", text)
+            snippets.append(text)
+
+    if not snippets:
+        # Try fallback selectors
+        for result in soup.select(".result__body")[:MAX_SNIPPETS]:
+            text = result.get_text(strip=True)
+            if text:
+                text = re.sub(r"\s+", " ", text)
+                snippets.append(text)
+
+    return "\n".join(snippets) if snippets else ""
+
+
+# ── Cache helpers ─────────────────────────────────────────────────────
+
+def _cache_key(query: str) -> str:
+    """Generate a stable cache key from a query string.
+
+    Args:
+        query: The search query.
+
+    Returns:
+        A short hash string suitable as a dict key.
+    """
+    normalised = query.lower().strip()
+    return hashlib.md5(normalised.encode()).hexdigest()[:12]
+
 
 def _load_cache() -> dict:
     """Load the web cache from disk.
@@ -105,14 +219,18 @@ def _is_cache_valid(entry: dict) -> bool:
         return False
 
 
-# ── Weather handler ─────────────────────────────────────────────────
+# ── Deprecated weather handler ────────────────────────────────────────
+# DEPRECATED: The dedicated weather handler below is deprecated.
+# Weather queries are now routed through search_web() + Ollama.
+# This function is retained for reference and will be removed
+# once general web search is confirmed stable.
 
-@_register("weather")
-def _handle_weather(location: str = "Birmingham") -> str:
+def _handle_weather_legacy(location: str = "Birmingham") -> str:
     """Scrape current weather from wttr.in for a given location.
 
-    Uses a 30-minute cache to avoid repeated scraping.
-    Tries Playwright first, falls back to httpx if unavailable.
+    .. deprecated::
+        Use search_web() instead. This handler is retained for
+        reference only and will be removed in a future version.
 
     Args:
         location: The city name to fetch weather for.
@@ -120,89 +238,12 @@ def _handle_weather(location: str = "Birmingham") -> str:
     Returns:
         A plain-text weather summary string.
     """
-    cache_key = f"weather_{location.lower()}"
-    cache = _load_cache()
-
-    # Return cached result if still valid
-    if cache_key in cache and _is_cache_valid(cache[cache_key]):
-        print(f"[Aria] Weather: returning cached result for {location}.")
-        return cache[cache_key]["result"]
-
-    print(f"[Aria] Weather: scraping wttr.in for {location}...")
-
-    # Try Playwright first, fall back to httpx
-    try:
-        result = _scrape_wttr_playwright(location)
-    except Exception as e:
-        print(f"[Aria] Playwright failed ({e}), falling back to httpx...")
-        try:
-            result = _scrape_wttr_httpx(location)
-        except Exception as e2:
-            print(f"[Aria] httpx fallback also failed: {e2}")
-            return f"Sorry Chan, I couldn't fetch the weather for {location} right now."
-
-    # Cache the result
-    cache[cache_key] = {
-        "result": result,
-        "timestamp": datetime.now().isoformat(),
-    }
-    _save_cache(cache)
-
-    return result
-
-
-def _scrape_wttr_playwright(location: str) -> str:
-    """Scrape weather using a Playwright headless browser with JSON API.
-
-    Uses wttr.in's JSON endpoint and extracts a human-readable summary.
-
-    Args:
-        location: City name to query.
-
-    Returns:
-        A plain-text weather summary.
-
-    Raises:
-        Exception: If Playwright is not installed or scraping fails.
-    """
-    import json as _json
-    from playwright.sync_api import sync_playwright
-
-    url = f"https://wttr.in/{location}?format=j1"
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url, timeout=10000)
-        content = page.inner_text("body").strip()
-        browser.close()
-
-    if not content:
-        raise ValueError(f"Empty response from wttr.in for {location}")
-
-    data = _json.loads(content)
-    current = data["current_condition"][0]
-    temp_c = current["temp_C"]
-    desc = current["weatherDesc"][0]["value"]
-    humidity = current["humidity"]
-    wind_mph = current["windspeedMiles"]
-    return f"{location}: {desc}, {temp_c}°C, humidity {humidity}%, wind {wind_mph}mph"
-
-
-def _scrape_wttr_httpx(location: str) -> str:
-    """Fallback weather scrape using httpx (no browser needed for wttr.in format=3).
-
-    Args:
-        location: City name to query.
-
-    Returns:
-        A plain-text weather summary.
-
-    Raises:
-        Exception: If the HTTP request fails.
-    """
     import httpx
 
-    url = f"https://wttr.in/{location}?format=3"
-    response = httpx.get(url, timeout=8.0, headers={"User-Agent": "Aria/1.0"})
-    response.raise_for_status()
-    return response.text.strip()
+    try:
+        url = f"https://wttr.in/{location}?format=3"
+        response = httpx.get(url, timeout=8.0, headers={"User-Agent": "Aria/1.0"})
+        response.raise_for_status()
+        return response.text.strip()
+    except Exception as e:
+        return f"Sorry Chan, I couldn't fetch the weather for {location} right now."
