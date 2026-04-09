@@ -40,3 +40,4 @@ SQLAlchemy>=2.0.0
 
 # Web scraping (Phase 4 — live data access)
 playwright>=1.40.0
+beautifulsoup4>=4.12.0

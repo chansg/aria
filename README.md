@@ -5,11 +5,11 @@ persistent memory, and live web access. Built in Python on Windows 11.
 
 ## Features
 - Wake word activation — "Hey Aria"
-- Powered by Anthropic Claude API (with local Ollama fallback)
+- Three-tier intent routing — local, web+Ollama, Claude API
 - Piper TTS — hfc_female medium voice (local ONNX inference)
 - Chibi sprite avatar — desktop overlay with Win32 transparency
 - Persistent memory — SQLite episodic + semantic
-- Live web scraping — weather via Playwright/httpx
+- DuckDuckGo web scraping + Ollama local reasoning (Tier 2)
 - Scheduling and reminders via APScheduler
 - Voice recognition training with WER scoring
 
@@ -22,8 +22,8 @@ persistent memory, and live web access. Built in Python on Windows 11.
 | 3 | Piper TTS voice output | Complete |
 | 4 | Live web scraping — weather | Complete |
 | 5 | Sprite avatar system | Complete |
-| 6 | Voice recognition training | Planned |
-| 7 | Intent router | Planned |
+| 6 | Voice recognition training | Complete |
+| 7 | Intent router + Ollama integration | Complete |
 | 8 | Wake word polish + animations | Planned |
 
 ## Setup
@@ -74,11 +74,12 @@ aria/
 ├── config.py              # Not committed — contains API keys
 ├── config.example.py      # Safe template
 ├── core/
-│   ├── brain.py           # Claude API + local intent routing
+│   ├── brain.py           # Tier dispatcher — routes to handler
+│   ├── router.py          # Intent classification (single source of truth)
 │   ├── memory.py          # SQLite persistent memory
 │   ├── scheduler.py       # APScheduler reminders
 │   ├── personality.py     # Aria's evolving personality
-│   └── web_search.py      # Playwright web scraping (weather + more)
+│   └── web_search.py      # DuckDuckGo scraping + result caching
 ├── voice/
 │   ├── listener.py        # Microphone capture + silence detection
 │   ├── transcriber.py     # Whisper speech-to-text (CUDA)
@@ -102,15 +103,16 @@ aria/
 ## Tech Stack
 | Component | Technology |
 |-----------|-----------|
-| AI Brain | Anthropic Claude API (Haiku + Sonnet) |
-| Local Fallback | Ollama |
-| Voice Input | faster-whisper (CUDA) |
+| AI Brain (Tier 3) | Anthropic Claude API (Haiku + Sonnet) |
+| Local Reasoning (Tier 2) | Ollama + DuckDuckGo web scraping |
+| Intent Router | Keyword-based tier classification |
+| Voice Input | faster-whisper large-v2 (CUDA + VAD) |
 | Voice Output | Piper TTS (hfc_female medium) |
 | Wake Word | Whisper keyword spotting (no API keys) |
 | Avatar | Pygame sprite system + Win32 overlay |
 | Memory | SQLite (episodic + semantic) + JSON |
 | Scheduler | APScheduler + SQLAlchemy |
-| Web Scraping | Playwright + httpx |
+| Web Scraping | Playwright + httpx + BeautifulSoup |
 
 ## Author
 Chanveer Grewal — github.com/chansg

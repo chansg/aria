@@ -1,20 +1,29 @@
 """
 Aria Brain Module
 =================
-Handles AI reasoning via Anthropic Claude API or local Ollama model.
-Toggle USE_LOCAL_MODEL in config.py to switch backends.
+Aria's reasoning orchestrator.
 
-Uses Claude tool use to let Aria manage the schedule naturally
-from voice commands.
+All queries are classified by core/router.py first.
+brain.py dispatches to the correct handler based on tier.
+No intent classification logic lives here.
+
+Tier dispatch:
+    Tier 1 — router.py local handlers (time, date, calendar)
+    Tier 2 — web_search.py + Ollama local model reasoning
+    Tier 3 — Claude API for complex open-ended reasoning only
+
+Preserved across all tiers:
+    - Episodic memory (store_episodic) — every exchange is recorded
+    - Personality (record_interaction) — interaction count incremented
+    - Memory context (build_memory_context) — injected into Claude prompts
+    - Scheduler tool use — Claude can manage reminders via tool calls
 """
 
 import json
-import re
 import httpx
 import anthropic
 from datetime import datetime
 from config import (
-    USE_LOCAL_MODEL,
     ANTHROPIC_API_KEY,
     ANTHROPIC_MODEL,
     ANTHROPIC_MODEL_LITE,
@@ -23,80 +32,20 @@ from config import (
     OLLAMA_MODEL,
     MAX_CONVERSATION_TURNS,
 )
+from core.router import classify, handle_time, handle_date, handle_calendar
 from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
 from core.web_search import search_web
 
 
-# --- Local intent patterns (bypass Claude API entirely) ---
-LOCAL_INTENTS = {
-    "time": {
-        "patterns": [
-            r"\bwhat\s+time\b",
-            r"\bwhat's\s+the\s+time\b",
-            r"\btell\s+me\s+the\s+time\b",
-            r"\bcurrent\s+time\b",
-        ],
-        "handler": lambda _: f"It's {datetime.now().strftime('%H:%M')}, Chan.",
-    },
-    "date": {
-        "patterns": [
-            r"\bwhat\s+date\b",
-            r"\bwhat's\s+the\s+date\b",
-            r"\bwhat\s+day\s+is\s+it\b",
-            r"\btoday's\s+date\b",
-            r"\bcurrent\s+date\b",
-        ],
-        "handler": lambda _: f"It's {datetime.now().strftime('%A, %d %B %Y')}.",
-    },
-    "schedule_check": {
-        "patterns": [
-            r"\bwhat\s+reminders?\b",
-            r"\bshow\s+(my\s+)?reminders?\b",
-            r"\blist\s+(my\s+)?reminders?\b",
-            r"\bmy\s+schedule\b",
-        ],
-        "handler": lambda _: list_reminders(),
-    },
-    "weather": {
-        "patterns": [
-            r"\bweather\b",
-            r"\btemperature\b",
-            r"\bforecast\b",
-            r"\braining\b",
-            r"\bsunny\b",
-            r"\bcloudy\b",
-            r"\bhow\s+(cold|warm|hot)\b",
-            r"\bumbrella\b",
-        ],
-        "handler": lambda _: f"Here's the current weather, Chan: {search_web('weather', location='Birmingham')}",
-    },
-}
+# ── Ollama configuration ──────────────────────────────────────────────────────
+
+OLLAMA_GENERATE_URL = f"{OLLAMA_BASE_URL}/api/generate"
 
 
-def _try_local_intent(user_input: str) -> str | None:
-    """Try to handle the query locally without calling Claude.
+# ── Claude tool definitions for scheduler ─────────────────────────────────────
 
-    Matches user input against LOCAL_INTENTS patterns. If a match
-    is found, runs the handler and returns the response.
-
-    Args:
-        user_input: The user's message.
-
-    Returns:
-        A response string if matched, or None if no local intent fits.
-    """
-    lowered = user_input.lower()
-    for intent in LOCAL_INTENTS.values():
-        for pattern in intent["patterns"]:
-            if re.search(pattern, lowered):
-                print("[Aria] Handled locally — no API call needed.")
-                return intent["handler"](user_input)
-    return None
-
-
-# --- Tool definitions for Claude ---
 TOOLS = [
     {
         "name": "add_reminder_at_time",
@@ -170,6 +119,8 @@ TOOLS = [
 ]
 
 
+# ── Model selection ───────────────────────────────────────────────────────────
+
 def _select_model(user_input: str) -> str:
     """Return the appropriate Claude model based on query complexity.
 
@@ -185,10 +136,12 @@ def _select_model(user_input: str) -> str:
     lowered = user_input.lower()
     word_count = len(lowered.split())
     if word_count > 25 or any(kw in lowered for kw in COMPLEX_QUERY_KEYWORDS):
-        print(f"[Aria] Complex query detected — using {ANTHROPIC_MODEL}")
+        print(f"[Brain] Complex query detected — using {ANTHROPIC_MODEL}")
         return ANTHROPIC_MODEL
     return ANTHROPIC_MODEL_LITE
 
+
+# ── Tool execution ────────────────────────────────────────────────────────────
 
 def _execute_tool(tool_name: str, tool_input: dict) -> str:
     """Execute a tool call from Claude and return the result.
@@ -233,11 +186,16 @@ def _execute_tool(tool_name: str, tool_input: dict) -> str:
     return f"Unknown tool: {tool_name}"
 
 
-def think(user_input: str) -> str:
-    """Process user input and return Aria's response.
+# ── Public entry point ────────────────────────────────────────────────────────
 
-    Routes to either the Claude API or a local Ollama model
-    depending on the USE_LOCAL_MODEL config toggle.
+def think(user_input: str) -> str:
+    """Generate Aria's response using the tiered routing system.
+
+    Classifies the query via router.py, then dispatches to the
+    appropriate handler. Claude is only called for Tier 3 queries.
+
+    Every call stores the exchange in episodic memory and records
+    the interaction for personality evolution.
 
     Args:
         user_input: The transcribed text from the user.
@@ -248,12 +206,118 @@ def think(user_input: str) -> str:
     # Store what the user said
     store_episodic("user", user_input)
 
-    # Try local intent first (no API call needed)
-    local_response = _try_local_intent(user_input)
-    if local_response is not None:
-        store_episodic("aria", local_response)
+    # Classify intent via router
+    route = classify(user_input)
+    tier = route["tier"]
+    intent = route["intent"]
+
+    # ── Tier 1: Local — zero network ─────────────────────────────────────
+    if tier == 1:
+        if intent == "time":
+            response = handle_time()
+        elif intent == "date":
+            response = handle_date()
+        elif intent == "calendar":
+            response = handle_calendar()
+        else:
+            response = handle_time()  # fallback
+
+        store_episodic("aria", response)
         record_interaction()
-        return local_response
+        return response
+
+    # ── Tier 2: Web scrape + Ollama ──────────────────────────────────────
+    if tier == 2:
+        response = _handle_web_query(user_input)
+        store_episodic("aria", response)
+        record_interaction()
+        return response
+
+    # ── Tier 3: Claude API ───────────────────────────────────────────────
+    response = _handle_claude(user_input)
+    store_episodic("aria", response)
+    record_interaction()
+    return response
+
+
+# ── Tier 2 handler ────────────────────────────────────────────────────────────
+
+def _handle_web_query(text: str) -> str:
+    """Handle a Tier 2 query: scrape web, reason with Ollama.
+
+    Falls back to Claude if Ollama is unavailable.
+
+    Args:
+        text: The user's original query.
+
+    Returns:
+        Aria's response based on web-retrieved content.
+    """
+    try:
+        web_context = search_web(text)
+
+        prompt = (
+            "You are Aria, a helpful and concise personal AI assistant. "
+            "Answer the following question using only the web information provided. "
+            "Be brief — 1 to 3 sentences maximum. Address the user as Chan. "
+            "If the web information does not contain a clear answer, say so.\n\n"
+            f"Web information:\n{web_context}\n\n"
+            f"Question: {text}\n\n"
+            "Answer:"
+        )
+
+        return _query_ollama(prompt)
+
+    except Exception as e:
+        print(f"[Brain] Tier 2 failed ({e}) — falling back to Claude.")
+        return _handle_claude(text)
+
+
+def _query_ollama(prompt: str) -> str:
+    """Send a prompt to the local Ollama model and return the response.
+
+    Args:
+        prompt: Full prompt string including any web context.
+
+    Returns:
+        The model's response as a plain string.
+
+    Raises:
+        Exception: If Ollama is not running or returns an error.
+    """
+    response = httpx.post(
+        OLLAMA_GENERATE_URL,
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+        },
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    result = response.json().get("response", "").strip()
+    if not result:
+        raise ValueError("Ollama returned an empty response.")
+    return result
+
+
+# ── Tier 3 handler ────────────────────────────────────────────────────────────
+
+def _handle_claude(user_input: str) -> str:
+    """Handle a Tier 3 query using the Claude API with tool support.
+
+    Builds the full system prompt with personality and memory context.
+    If Claude decides to use a tool, executes it and sends the result
+    back for a final natural language response.
+
+    Args:
+        user_input: The user's message.
+
+    Returns:
+        Claude's response text.
+    """
+    if not ANTHROPIC_API_KEY:
+        return "I can't think right now — my API key isn't set. Add ANTHROPIC_API_KEY to your .env file, Chan."
 
     # Build the full prompt with memory context
     system_prompt = get_system_prompt()
@@ -266,37 +330,11 @@ def think(user_input: str) -> str:
     now = datetime.now()
     system_prompt += f"\n\nCurrent date and time: {now.strftime('%A %d %B %Y, %H:%M')}."
 
-    # Route to the appropriate backend
-    if USE_LOCAL_MODEL:
-        response = _think_local(system_prompt, user_input)
-    else:
-        response = _think_claude(system_prompt, user_input)
-
-    # Store Aria's response and record the interaction
-    store_episodic("aria", response)
-    record_interaction()
-
-    return response
-
-
-def _think_claude(system_prompt: str, user_input: str) -> str:
-    """Send the prompt to Anthropic's Claude API with tool support.
-
-    If Claude decides to use a tool, executes it and sends the result
-    back for a final natural language response.
-
-    Args:
-        system_prompt: The full system prompt with personality and memory.
-        user_input: The user's message.
-
-    Returns:
-        Claude's response text.
-    """
-    if not ANTHROPIC_API_KEY:
-        return "I can't think right now — my API key isn't set. Add ANTHROPIC_API_KEY to your .env file, Chan."
-
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, default_headers={"anthropic-beta": "prompt-caching-2024-07-31"})
+        client = anthropic.Anthropic(
+            api_key=ANTHROPIC_API_KEY,
+            default_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
+        )
         model = _select_model(user_input)
         messages = [{"role": "user", "content": user_input}]
         cached_system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
@@ -312,15 +350,14 @@ def _think_claude(system_prompt: str, user_input: str) -> str:
 
         # If Claude wants to use a tool, execute it and get a final response
         if response.stop_reason == "tool_use":
-            # Process all tool calls
             tool_results = []
             assistant_content = response.content
 
             for block in assistant_content:
                 if block.type == "tool_use":
-                    print(f"[Aria] Using tool: {block.name}")
+                    print(f"[Brain] Using tool: {block.name}")
                     result = _execute_tool(block.name, block.input)
-                    print(f"[Aria] Tool result: {result}")
+                    print(f"[Brain] Tool result: {result}")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -350,7 +387,7 @@ def _think_claude(system_prompt: str, user_input: str) -> str:
     except anthropic.RateLimitError:
         return "I've been rate-limited by the API. Give me a moment and try again."
     except Exception as e:
-        print(f"[Aria] Claude API error: {e}")
+        print(f"[Brain] Claude API error: {e}")
         return "Something went wrong reaching the API. Check the console for details."
 
 
@@ -367,40 +404,3 @@ def _extract_text(response) -> str:
         if hasattr(block, "text"):
             return block.text
     return "I processed that, but I'm not sure what to say about it."
-
-
-def _think_local(system_prompt: str, user_input: str) -> str:
-    """Send the prompt to a local Ollama model.
-
-    Note: Ollama doesn't support tool use the same way, so schedule
-    commands are handled by keyword matching as a fallback.
-
-    Args:
-        system_prompt: The full system prompt with personality and memory.
-        user_input: The user's message.
-
-    Returns:
-        The local model's response text.
-    """
-    try:
-        response = httpx.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_input},
-                ],
-                "stream": False,
-            },
-            timeout=60.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["message"]["content"]
-
-    except httpx.ConnectError:
-        return "I can't reach Ollama — is it running? Start it with 'ollama serve' in another terminal."
-    except Exception as e:
-        print(f"[Aria] Ollama error: {e}")
-        return "Something went wrong with the local model. Check the console."
