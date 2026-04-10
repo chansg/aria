@@ -18,6 +18,28 @@ MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
 MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
 TRANSCRIPTION_TIMEOUT = 15    # Seconds before aborting a Whisper transcription
 
+# --- VTube Studio — avatar expression hotkeys ---
+# Set these to match the exact hotkey names configured in VTube Studio
+# Leave as None if the hotkey is not yet configured
+VTS_STATE_HOTKEYS = {
+    "idle":      None,   # Default resting expression
+    "listening": None,   # Alert/attentive expression
+    "thinking":  None,   # Contemplative expression
+    "dormant":   None,   # Sleeping expression
+}
+
+VTS_MOOD_HOTKEYS = {
+    "HAPPY":     None,   # Happy/cheerful expression
+    "NEUTRAL":   None,   # Default neutral expression
+    "THINKING":  None,   # Thoughtful expression
+    "SURPRISED": None,   # Surprised expression
+    "SAD":       None,   # Sad/concerned expression
+}
+
+# VTube Studio API
+VTS_PORT = 8001
+VTS_ENABLED = True   # Set to False to run without VTube Studio
+
 # --- TTS Voice Model ---
 # Download from HuggingFace: rhasspy/piper-voices → en/en_US/hfc_female/medium/
 # Save to: assets/voices/en_US-hfc_female-medium.onnx (and .onnx.json)

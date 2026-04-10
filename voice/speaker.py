@@ -5,7 +5,7 @@ Text-to-speech output using Piper TTS with the hfc_female medium
 ONNX voice model. Runs fully locally with no API calls.
 
 Generates WAV audio via ONNX inference and plays it through
-the default output device using pygame.mixer.
+the default output device using sounddevice.
 Integrates with the avatar renderer for speaking state and lip-sync.
 """
 
@@ -13,7 +13,7 @@ import wave
 import os
 import time
 import numpy as np
-import pygame
+import sounddevice as sd
 from piper.voice import PiperVoice
 from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE, MAX_SPEAK_LENGTH
 
@@ -49,7 +49,7 @@ def _load_voice() -> PiperVoice:
 
 
 def speak(text: str) -> None:
-    """Synthesise text to speech and play it via pygame.
+    """Synthesise text to speech and play it via sounddevice.
 
     Truncates text exceeding MAX_SPEAK_LENGTH characters.
     Updates avatar state to 'speaking' during playback with
@@ -94,7 +94,7 @@ def speak(text: str) -> None:
 def _speak_sync(text: str) -> None:
     """Synchronous implementation of text-to-speech with lip-sync.
 
-    Generates a WAV via Piper TTS, then plays it using pygame.mixer
+    Generates a WAV via Piper TTS, then plays it using sounddevice
     while feeding amplitude data to the avatar for lip-sync.
 
     Args:
@@ -109,20 +109,26 @@ def _speak_sync(text: str) -> None:
     with wave.open(OUTPUT_WAV, "wb") as wav_file:
         voice.synthesize_wav(text, wav_file)
 
-    # Read the WAV data for amplitude analysis
+    # Read the WAV data for playback and amplitude analysis
     with wave.open(OUTPUT_WAV, "rb") as wf:
         n_frames = wf.getnframes()
         sample_rate = wf.getframerate()
+        n_channels = wf.getnchannels()
         raw_data = wf.readframes(n_frames)
 
     audio_array = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32)
 
-    # Play the audio
-    if not pygame.mixer.get_init():
-        pygame.mixer.init()
+    # If stereo, take first channel for amplitude analysis
+    if n_channels > 1:
+        audio_array = audio_array[::n_channels]
 
-    pygame.mixer.music.load(OUTPUT_WAV)
-    pygame.mixer.music.play()
+    # Normalise to float32 [-1.0, 1.0] for sounddevice
+    audio_playback = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+    if n_channels > 1:
+        audio_playback = audio_playback.reshape(-1, n_channels)
+
+    # Start non-blocking playback
+    sd.play(audio_playback, samplerate=sample_rate)
 
     # Feed amplitude to the avatar during playback
     chunk_samples = int(sample_rate * 0.05)  # 50ms chunks
@@ -133,7 +139,7 @@ def _speak_sync(text: str) -> None:
     except ImportError:
         set_amplitude = None
 
-    while pygame.mixer.music.get_busy():
+    while sd.get_stream().active:
         if set_amplitude and len(audio_array) > 0:
             elapsed = time.time() - start_time
             sample_pos = int(elapsed * sample_rate)
@@ -150,7 +156,7 @@ def _speak_sync(text: str) -> None:
 
         time.sleep(0.05)
 
+    sd.wait()  # Ensure playback is fully complete
+
     if set_amplitude:
         set_amplitude(0.0)
-
-    pygame.mixer.music.unload()
