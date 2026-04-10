@@ -1,88 +1,118 @@
 """
-Aria Avatar Renderer
-====================
-High-level interface for controlling the avatar's visual state.
-Wraps the AvatarWindow and provides simple methods for the
-voice pipeline to update what the avatar is doing.
+avatar/renderer.py
+------------------
+Avatar interface for Aria. Delegates all rendering to VTube Studio
+via VTSController. Pygame has been removed entirely.
+
+Provides the same public interface as the old Pygame renderer so
+main.py requires minimal changes:
+    create_avatar()  — initialises and starts the VTS controller
+    set_idle()       — sets avatar to idle state
+    set_listening()  — sets avatar to listening state
+    set_thinking()   — sets avatar to thinking state
+    set_dormant()    — sets avatar to dormant/sleeping state
 """
 
-from avatar.window import (
-    AvatarWindow,
-    STATE_IDLE,
-    STATE_LISTENING,
-    STATE_THINKING,
-    STATE_SPEAKING,
-    STATE_DORMANT,
-)
+from avatar.vts_controller import VTSController
 
-# Module-level avatar instance
-_avatar: AvatarWindow = None
+_controller: VTSController = None
 
 
-def create_avatar(on_mode_toggle=None) -> AvatarWindow:
-    """Create the avatar window instance.
-
-    Must be called from the main thread before starting the mainloop.
+def create_avatar(on_mode_toggle=None) -> "AvatarHandle":
+    """Initialise the VTS controller and connect to VTube Studio.
 
     Args:
-        on_mode_toggle: Optional callback that toggles conversation mode.
-                        Called when the user clicks the mode button on
-                        the avatar overlay. Should return the new state
-                        (True = ON, False = OFF).
+        on_mode_toggle: Optional callback for mode toggle (retained for
+                        compatibility with main.py — not used with VTS).
 
     Returns:
-        The AvatarWindow instance.
+        An AvatarHandle instance with a run() and close() method.
     """
-    global _avatar
-    _avatar = AvatarWindow(on_mode_toggle=on_mode_toggle)
-    _avatar.create()
-    return _avatar
-
-
-def get_avatar() -> AvatarWindow:
-    """Get the current avatar window instance.
-
-    Returns:
-        The AvatarWindow instance, or None if not created.
-    """
-    return _avatar
+    global _controller
+    _controller = VTSController()
+    _controller.start()
+    return AvatarHandle(_controller, on_mode_toggle=on_mode_toggle)
 
 
 def set_idle() -> None:
-    """Set the avatar to idle state (default resting state)."""
-    if _avatar:
-        _avatar.set_state(STATE_IDLE)
+    """Set avatar to idle state."""
+    if _controller:
+        _controller.set_state("idle")
 
 
 def set_listening() -> None:
-    """Set the avatar to listening state (mic is active)."""
-    if _avatar:
-        _avatar.set_state(STATE_LISTENING)
+    """Set avatar to listening state."""
+    if _controller:
+        _controller.set_state("listening")
 
 
 def set_thinking() -> None:
-    """Set the avatar to thinking state (waiting for AI response)."""
-    if _avatar:
-        _avatar.set_state(STATE_THINKING)
+    """Set avatar to thinking state."""
+    if _controller:
+        _controller.set_state("thinking")
 
 
 def set_speaking() -> None:
-    """Set the avatar to speaking state (TTS is playing)."""
-    if _avatar:
-        _avatar.set_state(STATE_SPEAKING)
+    """Set avatar to speaking state."""
+    if _controller:
+        _controller.set_state("speaking")
 
 
 def set_dormant() -> None:
-    """Set the avatar to dormant state (sleep mode)."""
-    if _avatar:
-        _avatar.set_state(STATE_DORMANT)
+    """Set avatar to dormant/sleeping state."""
+    if _controller:
+        _controller.set_state("dormant")
 
 
 def set_amplitude(amplitude: float) -> None:
     """Set the current audio amplitude for lip-sync animation.
 
+    With VTube Studio, lip sync is handled by VB-Audio Virtual Cable
+    routing directly to VTS. This function is retained for interface
+    compatibility but is a no-op.
+
     Args:
-        amplitude: Normalised amplitude (0.0 to 1.0).
+        amplitude: Normalised amplitude (0.0 to 1.0). Ignored.
     """
-    if _avatar:
-        _avatar.set_amplitude(amplitude)
+    pass
+
+
+class AvatarHandle:
+    """Lightweight handle returned by create_avatar().
+
+    Replaces the old AvatarWindow that ran the Pygame main loop.
+    VTS handles its own window — this class just manages lifecycle.
+
+    Attributes:
+        controller: The underlying VTSController instance.
+    """
+
+    def __init__(self, controller: VTSController, on_mode_toggle=None):
+        """Initialise the handle with a VTS controller.
+
+        Args:
+            controller: The active VTSController instance.
+            on_mode_toggle: Optional mode toggle callback from main.py.
+        """
+        self.controller = controller
+        self._on_mode_toggle = on_mode_toggle
+
+    def run(self) -> None:
+        """Block the main thread until Aria exits.
+
+        Previously this ran the Pygame event loop. Now it simply keeps
+        the main thread alive while the voice pipeline runs in the
+        background thread.
+        """
+        print("[Avatar] VTube Studio mode active. Press Ctrl+C to quit.")
+        try:
+            while True:
+                import time
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n[Aria] Shutting down...")
+
+    def close(self) -> None:
+        """Stop the VTS controller and close the connection."""
+        if self.controller:
+            self.controller.stop()

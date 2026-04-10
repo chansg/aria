@@ -20,6 +20,7 @@ Preserved across all tiers:
 """
 
 import json
+import re
 import httpx
 import anthropic
 from datetime import datetime
@@ -139,6 +140,45 @@ def _select_model(user_input: str) -> str:
         print(f"[Brain] Complex query detected — using {ANTHROPIC_MODEL}")
         return ANTHROPIC_MODEL
     return ANTHROPIC_MODEL_LITE
+
+
+# ── Mood tag parsing ─────────────────────────────────────────────────────────
+
+def _parse_mood_tag(text: str) -> tuple[str, str]:
+    """Extract a mood tag from the start of a response string.
+
+    brain.py prompts the LLM to prefix responses with a mood tag.
+    This function extracts the tag and returns the clean text separately.
+
+    Args:
+        text: Raw LLM response potentially starting with [MOOD_TAG].
+
+    Returns:
+        Tuple of (mood_tag, clean_text). mood_tag is 'NEUTRAL' if none found.
+
+    Example:
+        '[HAPPY] Hello Chan!' -> ('HAPPY', 'Hello Chan!')
+    """
+    match = re.match(r'^\[([A-Z]+)\]\s*', text)
+    if match:
+        tag = match.group(1)
+        clean = text[match.end():]
+        return tag, clean
+    return "NEUTRAL", text
+
+
+def _trigger_avatar_mood(mood: str) -> None:
+    """Trigger a mood expression on the VTS avatar.
+
+    Args:
+        mood: Mood tag string (e.g. 'HAPPY', 'SAD').
+    """
+    try:
+        from avatar.renderer import _controller
+        if _controller:
+            _controller.trigger_mood(mood)
+    except Exception:
+        pass  # Avatar not connected — continue silently
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
@@ -261,12 +301,18 @@ def _handle_web_query(text: str) -> str:
             "Answer the following question using only the web information provided. "
             "Be brief — 1 to 3 sentences maximum. Address the user as Chan. "
             "If the web information does not contain a clear answer, say so.\n\n"
+            "IMPORTANT: Begin every response with a mood tag in square brackets. "
+            "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD]. "
+            "Example: '[HAPPY] Of course, Chan! Here's what I found.'\n\n"
             f"Web information:\n{web_context}\n\n"
             f"Question: {text}\n\n"
             "Answer:"
         )
 
-        return _query_ollama(prompt)
+        raw = _query_ollama(prompt)
+        mood, clean_response = _parse_mood_tag(raw)
+        _trigger_avatar_mood(mood)
+        return clean_response
 
     except Exception as e:
         print(f"[Brain] Tier 2 failed ({e}) — falling back to Claude.")
@@ -330,6 +376,13 @@ def _handle_claude(user_input: str) -> str:
     now = datetime.now()
     system_prompt += f"\n\nCurrent date and time: {now.strftime('%A %d %B %Y, %H:%M')}."
 
+    # Request mood tag prefix for avatar expressions
+    system_prompt += (
+        "\n\nIMPORTANT: Begin every response with a mood tag in square brackets. "
+        "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD]. "
+        "Example: '[HAPPY] Of course, Chan! Here's what I found.'"
+    )
+
     try:
         client = anthropic.Anthropic(
             api_key=ANTHROPIC_API_KEY,
@@ -378,9 +431,15 @@ def _handle_claude(user_input: str) -> str:
                 messages=messages,
             )
 
-            return _extract_text(final_response)
+            reply = _extract_text(final_response)
+            mood, clean_response = _parse_mood_tag(reply)
+            _trigger_avatar_mood(mood)
+            return clean_response
 
-        return _extract_text(response)
+        reply = _extract_text(response)
+        mood, clean_response = _parse_mood_tag(reply)
+        _trigger_avatar_mood(mood)
+        return clean_response
 
     except anthropic.AuthenticationError:
         return "My API key seems invalid, Chan. Double-check what's in your .env file."

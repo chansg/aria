@@ -12,6 +12,8 @@ import wave
 import struct
 import math
 import tempfile
+import numpy as np
+import sounddevice as sd
 
 # Chime parameters
 CHIME_SAMPLE_RATE = 44100
@@ -93,20 +95,19 @@ def play_chime() -> None:
     """Play the wake chime sound.
 
     Generates the chime file on first call, then reuses it.
+    Uses sounddevice for playback (no pygame dependency).
     """
     global _chime_path
-    import pygame
 
     if _chime_path is None or not os.path.exists(_chime_path):
         _chime_path = _generate_chime_wav()
         print(f"[Aria] Wake chime generated: {_chime_path}")
 
-    if not pygame.mixer.get_init():
-        pygame.mixer.init()
+    # Read WAV and play via sounddevice
+    with wave.open(_chime_path, "rb") as wf:
+        raw_data = wf.readframes(wf.getnframes())
+        sample_rate = wf.getframerate()
 
-    chime_sound = pygame.mixer.Sound(_chime_path)
-    chime_sound.play()
-
-    # Wait for chime to finish (it's short)
-    import time
-    time.sleep(CHIME_DURATION * 2 + 0.15)
+    audio = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+    sd.play(audio, samplerate=sample_rate)
+    sd.wait()  # Block until chime finishes

@@ -11,8 +11,8 @@ Two modes controlled by a toggle button on the avatar overlay:
   MODE OFF — Sleep mode. Dormant until "Aria" is heard via wake word
              detection. Wakes for one question, then returns to sleep.
 
-Avatar uses a pygame sprite-based renderer with Win32 transparency.
-Sprites live in assets/sprites/.
+Avatar uses VTube Studio via pyvts WebSocket connection.
+VTS handles all rendering, lip sync via VB-Audio Virtual Cable.
 
 Usage:
     python main.py
@@ -262,7 +262,7 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
 def run_aria():
     """Initialise all systems, then launch avatar + voice pipeline.
 
-    The avatar runs on the main thread (pygame requirement).
+    The avatar connects to VTube Studio in a background thread.
     The voice pipeline runs in a daemon background thread.
     """
     print("[Aria] Initialising systems...")
@@ -289,7 +289,7 @@ def run_aria():
         run_calibration(device_index=device_index)
     print()
 
-    # Create avatar window (main thread) with mode toggle callback
+    # Create avatar (connects to VTube Studio in background)
     avatar = create_avatar(on_mode_toggle=toggle_conversation_mode)
 
     # Launch voice pipeline in a background thread
@@ -300,7 +300,7 @@ def run_aria():
     )
     pipeline_thread.start()
 
-    # Run the avatar mainloop on the main thread (blocks until closed)
+    # Block main thread until exit (VTS handles its own window)
     avatar.run()
 
     print("[Aria] Shutdown complete.")
