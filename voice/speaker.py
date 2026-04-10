@@ -15,7 +15,8 @@ import time
 import numpy as np
 import sounddevice as sd
 from piper.voice import PiperVoice
-from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE, MAX_SPEAK_LENGTH
+import re
+from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE
 
 
 # Output WAV path (reused each utterance — overwritten, not accumulated)
@@ -48,10 +49,39 @@ def _load_voice() -> PiperVoice:
     return _voice
 
 
+def _clean_for_speech(text: str) -> str:
+    """Remove markdown formatting characters before TTS synthesis.
+
+    LLMs return markdown-formatted text. Piper TTS reads symbols
+    literally — asterisks become 'asterisk', hashes become 'hash'.
+    This function strips all markdown to produce clean speakable text.
+
+    Args:
+        text: Raw LLM response potentially containing markdown.
+
+    Returns:
+        Clean plain text suitable for TTS synthesis.
+    """
+    # Remove bold/italic asterisks and underscores
+    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}(.*?)_{1,3}', r'\1', text)
+    # Remove inline code backticks
+    text = re.sub(r'`{1,3}(.*?)`{1,3}', r'\1', text)
+    # Remove markdown headers
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Remove bullet point dashes and asterisks at line start
+    text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
+    # Remove any remaining lone asterisks
+    text = text.replace('*', '').replace('#', '')
+    # Collapse multiple spaces/newlines into single space
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def speak(text: str) -> None:
     """Synthesise text to speech and play it via sounddevice.
 
-    Truncates text exceeding MAX_SPEAK_LENGTH characters.
+    Strips markdown formatting and speaks the full response.
     Updates avatar state to 'speaking' during playback with
     amplitude-synced lip movement, then back to 'idle' when finished.
     Falls back to terminal print if TTS or playback fails.
@@ -62,10 +92,12 @@ def speak(text: str) -> None:
     if not text or not text.strip():
         return
 
-    # Truncate overly long responses
-    if len(text) > MAX_SPEAK_LENGTH:
-        text = text[:MAX_SPEAK_LENGTH].rsplit(" ", 1)[0] + "..."
-        print(f"[Aria] Response truncated to {MAX_SPEAK_LENGTH} chars for TTS.")
+    # Warn on very long responses but still speak the full text
+    if len(text) > 1500:
+        print(f"[Aria] Long response ({len(text)} chars) — speaking full text.")
+
+    # Strip markdown formatting before synthesis
+    text = _clean_for_speech(text)
 
     # Update avatar state (imported here to avoid circular imports)
     try:
