@@ -218,32 +218,3 @@ def _is_cache_valid(entry: dict) -> bool:
     except Exception:
         return False
 
-
-# ── Deprecated weather handler ────────────────────────────────────────
-# DEPRECATED: The dedicated weather handler below is deprecated.
-# Weather queries are now routed through search_web() + Ollama.
-# This function is retained for reference and will be removed
-# once general web search is confirmed stable.
-
-def _handle_weather_legacy(location: str = "Birmingham") -> str:
-    """Scrape current weather from wttr.in for a given location.
-
-    .. deprecated::
-        Use search_web() instead. This handler is retained for
-        reference only and will be removed in a future version.
-
-    Args:
-        location: The city name to fetch weather for.
-
-    Returns:
-        A plain-text weather summary string.
-    """
-    import httpx
-
-    try:
-        url = f"https://wttr.in/{location}?format=3"
-        response = httpx.get(url, timeout=8.0, headers={"User-Agent": "Aria/1.0"})
-        response.raise_for_status()
-        return response.text.strip()
-    except Exception as e:
-        return f"Sorry Chan, I couldn't fetch the weather for {location} right now."
