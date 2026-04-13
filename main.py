@@ -36,6 +36,7 @@ from avatar.renderer import (
     set_dormant,
 )
 from voice.trainer import run_calibration, get_profile_summary
+from core.screen_capture import ScreenCapture
 
 # Name variants Whisper might produce (case-insensitive matching)
 # Expanded for large-v2 + British accent phonetic variants
@@ -76,6 +77,53 @@ def toggle_conversation_mode() -> bool:
         print("[Aria] Conversation mode ON.")
         set_idle()
     return _conversation_mode.is_set()
+
+
+# ── Free conversation mode flag ───────────────────────────────────
+# ON (set)  = Aria responds to all speech without name detection
+# OFF (clear) = Aria requires her name in every message
+_free_conversation = threading.Event()
+
+# Load default from config
+try:
+    import config as _cfg
+    if getattr(_cfg, 'CONVERSATION_MODE_DEFAULT', True):
+        _free_conversation.set()   # ON by default
+except Exception:
+    _free_conversation.set()       # Default to ON if config missing
+
+
+def is_free_conversation() -> bool:
+    """Check whether free conversation mode is active.
+
+    When True, Aria responds to all speech without name detection.
+    When False, Aria requires her name in every message.
+
+    Returns:
+        True if free conversation mode is ON.
+    """
+    return _free_conversation.is_set()
+
+
+def toggle_free_conversation() -> bool:
+    """Toggle free conversation mode on or off.
+
+    Returns:
+        The new state — True if now ON.
+    """
+    if _free_conversation.is_set():
+        _free_conversation.clear()
+        print("[Aria] Conversation mode: OFF — name required.")
+        speak("Conversation mode off. Say my name to get my attention.")
+    else:
+        _free_conversation.set()
+        print("[Aria] Conversation mode: ON — listening freely.")
+        speak("Conversation mode on. I'm listening.")
+    return _free_conversation.is_set()
+
+
+# ── Module-level screen capture instance ──────────────────────────
+_screen_capture: ScreenCapture | None = None
 
 
 def print_banner():
@@ -189,15 +237,32 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         set_idle()
                         continue
 
-                    # Check if it's addressed to Aria
-                    if not is_addressed_to_aria(text):
+                    # Check for conversation mode toggle commands
+                    text_lower = text.strip().lower()
+                    if any(phrase in text_lower for phrase in (
+                        "conversation mode on", "free conversation on",
+                    )):
+                        if not is_free_conversation():
+                            toggle_free_conversation()
+                        set_idle()
+                        continue
+
+                    if any(phrase in text_lower for phrase in (
+                        "conversation mode off", "free conversation off",
+                    )):
+                        if is_free_conversation():
+                            toggle_free_conversation()
+                        set_idle()
+                        continue
+
+                    # Name check — bypassed in free conversation mode
+                    if not is_free_conversation() and not is_addressed_to_aria(text):
                         set_idle()
                         continue
 
                     print(f"\n[Chan] {text}")
 
                     # Check for exit commands
-                    text_lower = text.strip().lower()
                     if any(cmd in text_lower for cmd in (
                         "quit", "exit", "goodbye", "shut down", "shutdown",
                     )):
@@ -256,6 +321,8 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                 break
     finally:
         shutdown_scheduler()
+        if _screen_capture:
+            _screen_capture.stop()
         avatar.close()
 
 
@@ -272,6 +339,28 @@ def run_aria():
     init_memory()
     load_personality()
     init_scheduler(announce_fn=announce_reminder)
+    print()
+
+    # Initialise screen capture if enabled
+    global _screen_capture
+    try:
+        import config
+        if getattr(config, 'SCREEN_CAPTURE_ENABLED', False):
+            _screen_capture = ScreenCapture(
+                interval=getattr(config, 'SCREEN_CAPTURE_INTERVAL', 5.0)
+            )
+            _screen_capture.start()
+        else:
+            print("[Capture] Screen capture disabled — set SCREEN_CAPTURE_ENABLED = True in config.py to enable.")
+    except Exception as e:
+        print(f"[Capture] ERROR: Could not start screen capture — {e}")
+    print()
+
+    # Log conversation mode status
+    if is_free_conversation():
+        print("[Aria] Conversation mode: ON — responding to all speech.")
+    else:
+        print("[Aria] Conversation mode: OFF — name required.")
     print()
 
     # Select microphone (must happen before threading)
