@@ -17,14 +17,20 @@ persistent memory, and live web access. Built in Python on Windows 11.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| 1 | Voice pipeline (Whisper) | Complete |
-| 2 | Claude brain + memory | Complete |
-| 3 | Piper TTS voice output | Complete |
-| 4 | Live web scraping — weather | Complete |
-| 5 | Sprite avatar system | Complete |
-| 6 | Voice recognition training | Complete |
-| 7 | Intent router + Ollama integration | Complete |
-| 8 | Wake word polish + animations | Planned |
+| 1 | Voice pipeline — Whisper large-v2 | Complete |
+| 2 | Claude brain + SQLite memory | Complete |
+| 3 | Piper TTS — hfc_female medium | Complete |
+| 4 | Web scraping — DuckDuckGo + Ollama | Complete |
+| 5 | Avatar — VTube Studio (Tororo model) | Complete |
+| 6 | Speech accuracy — VAD, noise reduction | Complete |
+| 7 | Intent router — three-tier system | Complete |
+| 8 | TTS fixes — markdown strip, no truncation | Complete |
+| 9 | Screen capture — Stage 1 desktop capture | Complete |
+| 10 | Conversation mode toggle | Complete |
+| 11 | Screen analysis — Stage 2 Gemini vision | Next session |
+| 12 | VTube Studio hotkey configuration | Planned |
+| 13 | Gemini integration — reasoning tier | Planned |
+| 14 | Voice recognition training | Planned |
 
 ## Setup
 
@@ -79,7 +85,8 @@ aria/
 │   ├── memory.py          # SQLite persistent memory
 │   ├── scheduler.py       # APScheduler reminders
 │   ├── personality.py     # Aria's evolving personality
-│   └── web_search.py      # DuckDuckGo scraping + result caching
+│   ├── web_search.py      # DuckDuckGo scraping + result caching
+│   └── screen_capture.py  # Desktop screenshot capture (Stage 1)
 ├── voice/
 │   ├── listener.py        # Microphone capture + silence detection
 │   ├── transcriber.py     # Whisper speech-to-text (CUDA)
@@ -89,8 +96,8 @@ aria/
 │   └── chime.py           # Wake notification sound
 ├── avatar/
 │   ├── renderer.py        # High-level avatar state API
-│   ├── animations.py      # Tick-based animation system
-│   └── window.py          # Win32 transparent desktop overlay
+│   ├── vts_controller.py  # VTube Studio WebSocket controller
+│   └── animations.py      # State + mood constants
 ├── tools/
 │   └── generate_sprites.py # Procedural sprite generation (Pillow)
 ├── assets/
@@ -109,7 +116,8 @@ aria/
 | Voice Input | faster-whisper large-v2 (CUDA + VAD) |
 | Voice Output | Piper TTS (hfc_female medium) |
 | Wake Word | Whisper keyword spotting (no API keys) |
-| Avatar | Pygame sprite system + Win32 overlay |
+| Avatar | VTube Studio via pyvts WebSocket |
+| Screen Capture | mss (native Windows GDI) |
 | Memory | SQLite (episodic + semantic) + JSON |
 | Scheduler | APScheduler + SQLAlchemy |
 | Web Scraping | Playwright + httpx + BeautifulSoup |

@@ -40,6 +40,25 @@ VTS_MOOD_HOTKEYS = {
 VTS_PORT = 8001
 VTS_ENABLED = True   # Set to False to run without VTube Studio
 
+# ── Screen Capture ────────────────────────────────────────────────────────────
+# Stage 1: Desktop screenshot capture for gameplay analysis pipeline
+# Set SCREEN_CAPTURE_ENABLED = True to activate
+# Gemini API key required for Stage 2 (vision analysis) — not needed today
+#
+# Where to add your Gemini API key when Stage 2 is ready:
+#   GEMINI_API_KEY = "your-gemini-api-key-here"
+#   Get your key at: https://aistudio.google.com/app/apikey
+#
+SCREEN_CAPTURE_ENABLED  = False   # Set to True to enable capture
+SCREEN_CAPTURE_INTERVAL = 5.0     # Seconds between screenshots
+
+# GEMINI_API_KEY = "your-gemini-api-key-here"  # Uncomment for Stage 2
+
+# ── Conversation Mode ─────────────────────────────────────────────────────────
+# True  = Aria responds to all speech without requiring her name (default)
+# False = Aria only responds when her name is spoken first
+CONVERSATION_MODE_DEFAULT = True
+
 # --- TTS Voice Model ---
 # Download from HuggingFace: rhasspy/piper-voices → en/en_US/hfc_female/medium/
 # Save to: assets/voices/en_US-hfc_female-medium.onnx (and .onnx.json)

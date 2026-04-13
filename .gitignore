@@ -31,6 +31,7 @@ data/voice_samples/
 data/voice_profile.json
 data/web_cache.json
 data/vts_token.txt
+data/captures/
 
 # Large model files (re-download, don't commit)
 assets/models/*.onnx
