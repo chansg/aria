@@ -46,6 +46,9 @@ SQLAlchemy>=2.0.0
 # Screen capture (Stage 1 — desktop screenshots via GDI)
 mss>=9.0.0
 
+# Vision analysis (Stage 2 — Gemini Flash screen understanding)
+google-generativeai>=0.7.0
+
 # Web scraping (Phase 4 — live data access)
 playwright>=1.40.0
 beautifulsoup4>=4.12.0

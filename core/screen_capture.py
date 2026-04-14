@@ -20,6 +20,7 @@ Usage:
 
 from __future__ import annotations
 
+import io
 import os
 import threading
 import time
@@ -27,12 +28,20 @@ from pathlib import Path
 
 import mss
 import mss.tools
+from PIL import Image
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-CAPTURE_DIR     = Path("data/captures")
-LATEST_PATH     = CAPTURE_DIR / "latest.png"
-BUFFER_SIZE     = 10        # Maximum number of screenshots to keep on disk
-CAPTURE_INTERVAL = 5.0      # Seconds between captures
+CAPTURE_DIR      = Path("data/captures")
+LATEST_PATH      = CAPTURE_DIR / "latest.png"
+BUFFER_SIZE      = 10         # Maximum number of screenshots to keep on disk
+CAPTURE_INTERVAL = 5.0        # Seconds between captures
+
+# Compression — downscale full desktop to a size Gemini Flash can swallow cheaply.
+# 1280x720 preserves enough detail for gameplay/UI recognition while keeping
+# payloads small (~150–300 KB per frame vs ~8–9 MB raw).
+COMPRESS_MAX_WIDTH  = 1280
+COMPRESS_MAX_HEIGHT = 720
+PNG_COMPRESS_LEVEL  = 6       # 0 (none) – 9 (max). 6 is PIL's sweet spot.
 
 
 class ScreenCapture:
@@ -115,10 +124,12 @@ class ScreenCapture:
                     time.sleep(self.interval)
 
     def _take_screenshot(self, sct: mss.mss, monitor: dict) -> None:
-        """Capture a single screenshot and save it to disk.
+        """Capture a single screenshot, compress it, and save to disk.
 
-        Saves a timestamped copy and overwrites latest.png.
-        Prunes the buffer if it exceeds BUFFER_SIZE.
+        Saves a timestamped copy and overwrites latest.png. Screenshots
+        are downscaled with PIL (LANCZOS) to COMPRESS_MAX_WIDTH x
+        COMPRESS_MAX_HEIGHT before saving, keeping per-frame payloads
+        small enough for Gemini Flash vision calls.
 
         Args:
             sct: Active mss instance.
@@ -128,17 +139,41 @@ class ScreenCapture:
         timestamp = int(time.time())
         filename  = CAPTURE_DIR / f"frame_{timestamp}.png"
 
-        # Capture and save timestamped frame
+        # Grab the raw frame from the GDI compositor
         screenshot = sct.grab(monitor)
-        mss.tools.to_png(screenshot.rgb, screenshot.size, output=str(filename))
 
-        # Always keep latest.png up to date for Stage 2 analysis
-        mss.tools.to_png(screenshot.rgb, screenshot.size, output=str(LATEST_PATH))
+        # Compress: mss returns BGRA; PIL wants RGB
+        compressed = self._compress_screenshot(screenshot)
 
-        print(f"[Capture] Frame {self.frame_count} saved → {filename.name}")
+        # Save timestamped frame + latest.png
+        compressed.save(filename,    format="PNG", optimize=True, compress_level=PNG_COMPRESS_LEVEL)
+        compressed.save(LATEST_PATH, format="PNG", optimize=True, compress_level=PNG_COMPRESS_LEVEL)
+
+        size_kb = filename.stat().st_size / 1024
+        print(f"[Capture] Frame {self.frame_count} saved → {filename.name} ({size_kb:.0f} KB)")
 
         # Prune rolling buffer
         self._prune_buffer()
+
+    def _compress_screenshot(self, screenshot) -> Image.Image:
+        """Convert an mss screenshot to a downscaled RGB PIL image.
+
+        Uses LANCZOS resampling for high-quality downscaling and
+        preserves aspect ratio — the frame is fit inside a
+        COMPRESS_MAX_WIDTH x COMPRESS_MAX_HEIGHT bounding box.
+
+        Args:
+            screenshot: The raw frame returned by mss.grab().
+
+        Returns:
+            A PIL Image in RGB mode, ready to save as PNG.
+        """
+        # mss gives us BGRA bytes; PIL reads them via 'raw' decoder
+        img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+
+        # Downscale in place, preserving aspect ratio
+        img.thumbnail((COMPRESS_MAX_WIDTH, COMPRESS_MAX_HEIGHT), Image.LANCZOS)
+        return img
 
     def _prune_buffer(self) -> None:
         """Delete oldest screenshots if buffer exceeds BUFFER_SIZE.

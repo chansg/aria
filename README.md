@@ -6,6 +6,7 @@ persistent memory, and live web access. Built in Python on Windows 11.
 ## Features
 - Wake word activation — "Hey Aria"
 - Three-tier intent routing — local, web+Ollama, Claude API
+- Screen understanding — ask "what do you see?" and Aria describes your desktop via Gemini Flash vision
 - Piper TTS — hfc_female medium voice (local ONNX inference)
 - Chibi sprite avatar — desktop overlay with Win32 transparency
 - Persistent memory — SQLite episodic + semantic
@@ -27,7 +28,7 @@ persistent memory, and live web access. Built in Python on Windows 11.
 | 8 | TTS fixes — markdown strip, no truncation | Complete |
 | 9 | Screen capture — Stage 1 desktop capture | Complete |
 | 10 | Conversation mode toggle | Complete |
-| 11 | Screen analysis — Stage 2 Gemini vision | Next session |
+| 11 | Screen analysis — Stage 2 Gemini vision | Complete |
 | 12 | VTube Studio hotkey configuration | Planned |
 | 13 | Gemini integration — reasoning tier | Planned |
 | 14 | Voice recognition training | Planned |
@@ -86,7 +87,8 @@ aria/
 │   ├── scheduler.py       # APScheduler reminders
 │   ├── personality.py     # Aria's evolving personality
 │   ├── web_search.py      # DuckDuckGo scraping + result caching
-│   └── screen_capture.py  # Desktop screenshot capture (Stage 1)
+│   ├── screen_capture.py  # Desktop screenshot capture (Stage 1)
+│   └── vision_analyzer.py # Gemini Flash screen understanding (Stage 2)
 ├── voice/
 │   ├── listener.py        # Microphone capture + silence detection
 │   ├── transcriber.py     # Whisper speech-to-text (CUDA)
@@ -118,6 +120,7 @@ aria/
 | Wake Word | Whisper keyword spotting (no API keys) |
 | Avatar | VTube Studio via pyvts WebSocket |
 | Screen Capture | mss (native Windows GDI) |
+| Vision Analysis | Google Gemini 2.5 Flash |
 | Memory | SQLite (episodic + semantic) + JSON |
 | Scheduler | APScheduler + SQLAlchemy |
 | Web Scraping | Playwright + httpx + BeautifulSoup |
