@@ -48,8 +48,9 @@ INTENT_MAP: dict[str, dict] = {
         "tier": 1,
         "keywords": [
             "what reminders", "show reminders", "list reminders",
-            "my reminders", "my schedule", "what's on", "agenda",
-            "show my schedule",
+            "my reminders", "my schedule", "show my schedule",
+            "what's on my schedule", "what's on my agenda",
+            "what's on today", "agenda",
         ],
     },
 
@@ -62,6 +63,23 @@ INTENT_MAP: dict[str, dict] = {
             "umbrella", "degrees outside", "rain today", "snow",
         ],
     },
+    # Tier 2 — Gemini vision (Stage 2 screen understanding)
+    # Listed before web_search because vision's "what is on my screen"
+    # phrase is more specific than web_search's "what is" prefix and
+    # should win the tie-break. Weather stays ahead of vision since
+    # its keywords ("weather", "temperature") never collide.
+    "vision": {
+        "tier": 2,
+        "keywords": [
+            "what do you see", "what can you see", "what do you notice",
+            "what's on screen", "what's on my screen", "what is on my screen",
+            "look at my screen", "look at the screen", "describe my screen",
+            "analyse my screen", "analyze my screen",
+            "what am i doing", "what game is this", "what game am i playing",
+            "what app is this", "read my screen",
+        ],
+    },
+
     "web_search": {
         "tier": 2,
         "keywords": [
@@ -105,7 +123,8 @@ def classify(text: str) -> dict:
     for intent_name, config in INTENT_MAP.items():
         if config["tier"] == 2:
             if _matches(text_lower, config["keywords"]):
-                print(f"[Router] Tier 2 matched: {intent_name} — web + Ollama.")
+                backend = "Gemini Flash" if intent_name == "vision" else "web + Ollama"
+                print(f"[Router] Tier 2 matched: {intent_name} — {backend}.")
                 return {"intent": intent_name, "tier": 2}
 
     # No match — escalate to Claude

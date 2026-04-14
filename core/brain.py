@@ -38,6 +38,21 @@ from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
 from core.web_search import search_web
+from core.vision_analyzer import VisionAnalyzer
+
+
+# ── Lazy singleton for Gemini vision ──────────────────────────────────────────
+# Constructed on first vision query so brain.py imports cheaply even when
+# google-generativeai is missing or GEMINI_API_KEY is unset.
+_vision_analyzer: VisionAnalyzer | None = None
+
+
+def _get_vision_analyzer() -> VisionAnalyzer:
+    """Return the shared VisionAnalyzer, constructing it on first use."""
+    global _vision_analyzer
+    if _vision_analyzer is None:
+        _vision_analyzer = VisionAnalyzer()
+    return _vision_analyzer
 
 
 # ── Ollama configuration ──────────────────────────────────────────────────────
@@ -266,9 +281,12 @@ def think(user_input: str) -> str:
         record_interaction()
         return response
 
-    # ── Tier 2: Web scrape + Ollama ──────────────────────────────────────
+    # ── Tier 2: Web scrape + Ollama, or Gemini vision ────────────────────
     if tier == 2:
-        response = _handle_web_query(user_input)
+        if intent == "vision":
+            response = _handle_vision(user_input)
+        else:
+            response = _handle_web_query(user_input)
         store_episodic("aria", response)
         record_interaction()
         return response
@@ -317,6 +335,31 @@ def _handle_web_query(text: str) -> str:
     except Exception as e:
         print(f"[Brain] Tier 2 failed ({e}) — falling back to Claude.")
         return _handle_claude(text)
+
+
+def _handle_vision(text: str) -> str:
+    """Handle a Tier 2 vision query via Gemini Flash.
+
+    Delegates to VisionAnalyzer, which reads the most recent
+    screenshot written by core.screen_capture and returns a short
+    natural-language reply in Aria's voice (mood-tag prefixed).
+
+    The analyzer never raises — on any failure it returns a
+    graceful fallback string. We still parse the mood tag so the
+    VTS avatar reacts appropriately.
+
+    Args:
+        text: The user's original question (e.g. "what do you see?").
+
+    Returns:
+        Aria's response string, ready for TTS.
+    """
+    print("[Brain] Tier 2 vision — querying Gemini Flash.")
+    analyzer = _get_vision_analyzer()
+    raw = analyzer.analyse_screen(context=text)
+    mood, clean_response = _parse_mood_tag(raw)
+    _trigger_avatar_mood(mood)
+    return clean_response
 
 
 def _query_ollama(prompt: str) -> str:
