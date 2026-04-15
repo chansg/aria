@@ -56,8 +56,9 @@ def _get_vision_analyzer() -> VisionAnalyzer:
 
 
 # ── Ollama configuration ──────────────────────────────────────────────────────
-
-OLLAMA_GENERATE_URL = f"{OLLAMA_BASE_URL}/api/generate"
+# Ollama 0.6+ deprecated /api/generate in favour of /api/chat.
+# The /api/chat endpoint uses a messages array instead of a prompt string.
+OLLAMA_CHAT_URL = f"{OLLAMA_BASE_URL}/api/chat"
 
 
 # ── Claude tool definitions for scheduler ─────────────────────────────────────
@@ -363,7 +364,10 @@ def _handle_vision(text: str) -> str:
 
 
 def _query_ollama(prompt: str) -> str:
-    """Send a prompt to the local Ollama model and return the response.
+    """Send a prompt to the local Ollama model using the /api/chat endpoint.
+
+    Uses the messages array format required by Ollama 0.6+.
+    The /api/generate endpoint was deprecated and returns 404 on newer versions.
 
     Args:
         prompt: Full prompt string including any web context.
@@ -375,16 +379,19 @@ def _query_ollama(prompt: str) -> str:
         Exception: If Ollama is not running or returns an error.
     """
     response = httpx.post(
-        OLLAMA_GENERATE_URL,
+        OLLAMA_CHAT_URL,
         json={
             "model": OLLAMA_MODEL,
-            "prompt": prompt,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
             "stream": False,
         },
         timeout=30.0,
     )
     response.raise_for_status()
-    result = response.json().get("response", "").strip()
+    data = response.json()
+    result = data.get("message", {}).get("content", "").strip()
     if not result:
         raise ValueError("Ollama returned an empty response.")
     return result

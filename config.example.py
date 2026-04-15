@@ -10,8 +10,10 @@ PICOVOICE_API_KEY = "your-picovoice-api-key-here"
 OPENWEATHER_API_KEY = ""  # Optional — currently using web scraping
 
 # --- Ollama (local LLM for Tier 2 reasoning) ---
+# Run `ollama list` to see which models are installed locally.
+# The model name here must match exactly — a mismatch returns 404.
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "llama3"
+OLLAMA_MODEL = "mistral"
 
 # --- Conversation / Prompt Limits ---
 MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
