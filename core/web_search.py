@@ -26,6 +26,65 @@ CACHE_TTL_MINUTES = 15
 MAX_SNIPPETS = 3
 
 
+# ── Query cleaning ───────────────────────────────────────────────────
+
+# Name variants and prefixes to strip from queries before web search
+_ARIA_PREFIXES = {
+    "hey aria", "hello aria", "hi aria", "ok aria", "okay aria",
+    "aria", "arya", "area", "ariya",
+}
+
+_CONVERSATIONAL_PREFIXES = (
+    "please ", "can you ", "could you ", "would you ",
+    "tell me about ", "tell me ", "show me ",
+    "what is the ", "what is ", "what's the ", "what's ",
+    "search for ", "look up ", "find out ",
+)
+
+
+def clean_query(raw: str) -> str:
+    """Strip Aria name variants and conversational filler from a search query.
+
+    Produces a clean, search-engine-friendly query string from raw
+    transcribed speech. Applied before every DuckDuckGo scrape.
+
+    Args:
+        raw: Raw transcribed text from the user, e.g.
+             'Hello Aria, what is the weather in Slough today?'
+
+    Returns:
+        Cleaned query string, e.g. 'weather in Slough today'
+
+    Examples:
+        >>> clean_query('Hello Aria, what is the weather in Slough?')
+        'weather in Slough'
+        >>> clean_query('Aria search for latest AI news')
+        'latest AI news'
+    """
+    text = raw.lower().strip().rstrip("?.,!")
+
+    # Strip Aria name variants from start
+    for prefix in sorted(_ARIA_PREFIXES, key=len, reverse=True):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip().lstrip(",").strip()
+            break
+
+    # Strip conversational prefixes — loop to catch chained filler
+    # e.g. "can you look up" → strip "can you " → strip "look up "
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _CONVERSATIONAL_PREFIXES:
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                changed = True
+                break
+
+    result = text.strip().rstrip("?.,!")
+    print(f"[WebSearch] Cleaned query: '{raw[:50]}' -> '{result}'")
+    return result
+
+
 # ── Public entry point ────────────────────────────────────────────────
 
 def search_web(query: str) -> str:
@@ -34,6 +93,9 @@ def search_web(query: str) -> str:
     Scrapes the DuckDuckGo HTML endpoint and extracts the top 3 result
     snippets as clean plain text. Results are cached for 15 minutes.
 
+    The raw query is cleaned first — Aria name variants and conversational
+    filler are stripped to produce a search-engine-friendly string.
+
     Args:
         query: Natural language search query from the user.
 
@@ -41,6 +103,7 @@ def search_web(query: str) -> str:
         Plain text string containing the top search result snippets,
         or an error message string if scraping fails.
     """
+    query = clean_query(query)  # Strip name and conversational filler
     cache_key = _cache_key(query)
     cache = _load_cache()
 
