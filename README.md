@@ -22,14 +22,14 @@ persistent memory, and live web access. Built in Python on Windows 11.
 | 2 | Claude brain + SQLite memory | Complete |
 | 3 | Piper TTS — hfc_female medium | Complete |
 | 4 | Web scraping — DuckDuckGo + Ollama | Complete |
-| 5 | Avatar — VTube Studio (Tororo model) | Complete |
+| 5 | Avatar — VTube Studio (Hiyori_A model) | Complete |
 | 6 | Speech accuracy — VAD, noise reduction | Complete |
 | 7 | Intent router — three-tier system | Complete |
 | 8 | TTS fixes — markdown strip, no truncation | Complete |
 | 9 | Screen capture — Stage 1 desktop capture | Complete |
 | 10 | Conversation mode toggle | Complete |
 | 11 | Screen analysis — Stage 2 Gemini vision | Complete |
-| 12 | VTube Studio hotkey configuration | Planned |
+| 12 | VTube Studio hotkey config — Hiyori expressions | Complete |
 | 13 | Gemini integration — reasoning tier | Planned |
 | 14 | Voice recognition training | Planned |
 
@@ -118,7 +118,7 @@ aria/
 | Voice Input | faster-whisper large-v2 (CUDA + VAD) |
 | Voice Output | Piper TTS (hfc_female medium) |
 | Wake Word | Whisper keyword spotting (no API keys) |
-| Avatar | VTube Studio via pyvts WebSocket |
+| Avatar | VTube Studio — Hiyori_A (Live2D) via pyvts |
 | Screen Capture | mss (native Windows GDI) |
 | Vision Analysis | Google Gemini 2.5 Flash |
 | Memory | SQLite (episodic + semantic) + JSON |
