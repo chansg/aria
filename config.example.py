@@ -20,26 +20,27 @@ MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
 MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
 TRANSCRIPTION_TIMEOUT = 15    # Seconds before aborting a Whisper transcription
 
-# --- VTube Studio — avatar expression hotkeys ---
-# Set these to match the exact hotkey names configured in VTube Studio
-# Leave as None if the hotkey is not yet configured
+# ── VTube Studio — Hiyori_A Model Configuration ───────────────────────────────
+# Hotkey names must match exactly what is configured in VTube Studio.
+# These have been manually created and confirmed in VTS for the Hiyori_A model.
+
 VTS_STATE_HOTKEYS = {
-    "idle":      None,   # Default resting expression
-    "listening": None,   # Alert/attentive expression
-    "thinking":  None,   # Contemplative expression
-    "dormant":   None,   # Sleeping expression
+    "idle":      None,           # Base state — no hotkey, Hiyori rests naturally
+    "listening": "hiyori_m05",   # Active listening expression
+    "thinking":  "hiyori_m03",   # Pensive, looking to the side
+    "dormant":   None,           # Sleeping — no hotkey at this stage
 }
 
 VTS_MOOD_HOTKEYS = {
-    "HAPPY":     None,   # Happy/cheerful expression
-    "NEUTRAL":   None,   # Default neutral expression
-    "THINKING":  None,   # Thoughtful expression
-    "SURPRISED": None,   # Surprised expression
-    "SAD":       None,   # Sad/concerned expression
+    "HAPPY":     "hiyori_m01",   # Bright cheerful smile
+    "NEUTRAL":   None,           # Base state — no hotkey fired
+    "THINKING":  "hiyori_m03",   # Pensive expression
+    "SURPRISED": "hiyori_m02",   # Wide eyes, open mouth
+    "SAD":       "hiyori_m04",   # Downcast, saddened
 }
 
 # VTube Studio API
-VTS_PORT = 8001
+VTS_PORT    = 8001
 VTS_ENABLED = True   # Set to False to run without VTube Studio
 
 # ── Screen Capture ────────────────────────────────────────────────────────────

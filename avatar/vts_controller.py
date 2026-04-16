@@ -37,26 +37,26 @@ PLUGIN_DEVELOPER = "chansg"
 VTS_HOST = "localhost"
 VTS_PORT = 8001
 
-# ── State to hotkey mapping ───────────────────────────────────────────────────
+# ── State to hotkey mapping — Hiyori_A model ─────────────────────────────────
 # These map Aria's internal states to VTS hotkey names.
-# Update hotkey names in config.py to match your model's actual hotkeys.
+# Override in config.py if using a different Live2D model.
 DEFAULT_STATE_HOTKEYS = {
-    "idle":      None,   # Default model pose — no hotkey needed
-    "listening": None,   # Same as idle for now
-    "thinking":  None,   # Can be mapped to a blinking/looking expression
-    "dormant":   None,   # Sleeping expression if model has one
+    "idle":      None,           # Base state — Hiyori rests naturally
+    "listening": "hiyori_m05",   # Active listening expression
+    "thinking":  "hiyori_m03",   # Pensive, looking to the side
+    "dormant":   None,           # Sleeping — no hotkey at this stage
 }
 
-# ── Mood tag to hotkey mapping ────────────────────────────────────────────────
+# ── Mood tag to hotkey mapping — Hiyori_A model ──────────────────────────────
 # Maps mood tags returned by brain.py to VTS hotkey names.
 # Hotkey names must match exactly what is configured in VTube Studio.
-# Update these in config.py once you have keybinds set up in VTS.
+# Override in config.py if using a different Live2D model.
 DEFAULT_MOOD_HOTKEYS = {
-    "HAPPY":     None,
-    "NEUTRAL":   None,
-    "THINKING":  None,
-    "SURPRISED": None,
-    "SAD":       None,
+    "HAPPY":     "hiyori_m01",   # Bright cheerful smile
+    "NEUTRAL":   None,           # Base state — no hotkey fired
+    "THINKING":  "hiyori_m03",   # Pensive expression
+    "SURPRISED": "hiyori_m02",   # Wide eyes, open mouth
+    "SAD":       "hiyori_m04",   # Downcast, saddened
 }
 
 
@@ -207,9 +207,10 @@ class VTSController:
         """Trigger a named hotkey in VTube Studio.
 
         Args:
-            hotkey_name: The exact hotkey name as configured in VTS.
+            hotkey_name: Exact hotkey name as configured in VTS.
+                         If None or empty, returns immediately.
         """
-        if not self._vts or not self.connected:
+        if not hotkey_name or not self._vts or not self.connected:
             return
         try:
             response = await self._vts.request(
