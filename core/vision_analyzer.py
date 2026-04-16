@@ -70,20 +70,20 @@ Style rules:
 class VisionAnalyzer:
     """Wraps Gemini Flash vision calls against Aria's latest screenshot.
 
-    The analyzer is lazy: it imports google-generativeai and reads the
+    The analyzer is lazy: it imports google.genai and reads the
     API key on first use so that import-time failures don't break the
     rest of Aria. Every public method returns a user-facing string —
     never raises — so `core.brain` can just speak whatever comes back.
 
     Attributes:
         available: True if the module can actually call Gemini.
-        _model:    Cached GenerativeModel instance once configured.
+        _client:   Cached genai.Client instance once configured.
     """
 
     def __init__(self) -> None:
         """Configure Gemini if possible; fall back silently otherwise."""
         self.available: bool = False
-        self._model = None
+        self._client = None
         self._configure()
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ class VisionAnalyzer:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _configure(self) -> None:
-        """Import google-generativeai and register the API key.
+        """Import google.genai and create a Gemini client.
 
         Silently disables the analyzer if the package or key are missing.
         """
@@ -155,19 +155,15 @@ class VisionAnalyzer:
             return
 
         try:
-            import google.generativeai as genai
+            from google import genai
         except ImportError:
-            print("[Vision] google-generativeai not installed — vision disabled.")
+            print("[Vision] google-genai not installed — vision disabled.")
             return
 
         try:
-            genai.configure(api_key=api_key)
-            self._model = genai.GenerativeModel(
-                model_name=GEMINI_MODEL,
-                system_instruction=VISION_SYSTEM_PROMPT,
-            )
+            self._client = genai.Client(api_key=api_key)
             self.available = True
-            print(f"[Vision] Gemini {GEMINI_MODEL} ready.")
+            print(f"[Vision] Gemini {GEMINI_MODEL} ready (google.genai SDK).")
         except Exception as e:
             print(f"[Vision] Failed to initialise Gemini: {e}")
 
@@ -219,18 +215,18 @@ class VisionAnalyzer:
         Returns:
             The plain-text reply from Gemini. Empty string if none.
         """
-        import google.generativeai as genai  # noqa: F401
-
-        response = self._model.generate_content(
-            [prompt, screenshot],
-            generation_config={
+        response = self._client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[prompt, screenshot],
+            config={
+                "system_instruction": VISION_SYSTEM_PROMPT,
                 "max_output_tokens": MAX_OUTPUT_TOKENS,
                 "temperature": 0.7,
+                "http_options": {"timeout": REQUEST_TIMEOUT * 1000},
             },
-            request_options={"timeout": REQUEST_TIMEOUT},
         )
 
-        # Gemini returns a candidate list; .text is the convenience accessor.
+        # .text is the convenience accessor for the first candidate.
         text = getattr(response, "text", "") or ""
         return text
 
