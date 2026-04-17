@@ -5,12 +5,13 @@ persistent memory, and live web access. Built in Python on Windows 11.
 
 ## Features
 - Wake word activation — "Hey Aria"
-- Three-tier intent routing — local, web+Ollama, Claude API
+- Three-tier intent routing — local, Gemini Flash (web+screen), Claude API
 - Screen understanding — ask "what do you see?" and Aria describes your desktop via Gemini Flash vision
+- Unified Tier 2 reasoning — web scrape + screenshot in a single Gemini call
 - Piper TTS — hfc_female medium voice (local ONNX inference)
 - Chibi sprite avatar — desktop overlay with Win32 transparency
 - Persistent memory — SQLite episodic + semantic
-- DuckDuckGo web scraping + Ollama local reasoning (Tier 2)
+- DuckDuckGo web scraping + Gemini Flash reasoning (Tier 2, Ollama offline fallback)
 - Scheduling and reminders via APScheduler
 - Voice recognition training with WER scoring
 
@@ -30,8 +31,10 @@ persistent memory, and live web access. Built in Python on Windows 11.
 | 10 | Conversation mode toggle | Complete |
 | 11 | Screen analysis — Stage 2 Gemini vision | Complete |
 | 12 | VTube Studio hotkey config — Hiyori expressions | Complete |
-| 13 | Gemini integration — reasoning tier | Planned |
-| 14 | Voice recognition training | Planned |
+| 13 | Gemini unified Tier 2 — web + screen reasoning | Complete |
+| 14 | TTS sentence splitting — no more cut-off | Complete |
+| 15 | Vision keyword expansion — natural language | Complete |
+| 16 | Voice recognition training | Planned |
 
 ## Setup
 
@@ -113,7 +116,7 @@ aria/
 | Component | Technology |
 |-----------|-----------|
 | AI Brain (Tier 3) | Anthropic Claude API (Haiku + Sonnet) |
-| Local Reasoning (Tier 2) | Ollama + DuckDuckGo web scraping |
+| Reasoning (Tier 2) | Gemini 2.5 Flash (web + screen) — Ollama Mistral offline fallback |
 | Intent Router | Keyword-based tier classification |
 | Voice Input | faster-whisper large-v2 (CUDA + VAD) |
 | Voice Output | Piper TTS (hfc_female medium) |

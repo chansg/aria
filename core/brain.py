@@ -9,7 +9,8 @@ No intent classification logic lives here.
 
 Tier dispatch:
     Tier 1 — router.py local handlers (time, date, calendar)
-    Tier 2 — web_search.py + Ollama local model reasoning
+    Tier 2 — Gemini Flash (web scrape + screenshot) as primary reasoner,
+             Ollama/Mistral as offline fallback (USE_LOCAL_FALLBACK=True)
     Tier 3 — Claude API for complex open-ended reasoning only
 
 Preserved across all tiers:
@@ -33,6 +34,13 @@ from config import (
     OLLAMA_MODEL,
     MAX_CONVERSATION_TURNS,
 )
+
+# USE_LOCAL_FALLBACK may not exist in older config.py files.
+# Default to False (Gemini primary) if the toggle is missing.
+try:
+    from config import USE_LOCAL_FALLBACK
+except ImportError:
+    USE_LOCAL_FALLBACK = False
 from core.router import classify, handle_time, handle_date, handle_calendar
 from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
@@ -282,12 +290,12 @@ def think(user_input: str) -> str:
         record_interaction()
         return response
 
-    # ── Tier 2: Web scrape + Ollama, or Gemini vision ────────────────────
+    # ── Tier 2: Gemini Flash (web + screen) or vision ──────────────────
     if tier == 2:
         if intent == "vision":
             response = _handle_vision(user_input)
         else:
-            response = _handle_web_query(user_input)
+            response = _handle_web_query(user_input, intent=intent)
         store_episodic("aria", response)
         record_interaction()
         return response
@@ -301,41 +309,58 @@ def think(user_input: str) -> str:
 
 # ── Tier 2 handler ────────────────────────────────────────────────────────────
 
-def _handle_web_query(text: str) -> str:
-    """Handle a Tier 2 query: scrape web, reason with Ollama.
+def _handle_web_query(text: str, intent: str = "") -> str:
+    """Handle a Tier 2 query using Gemini Flash as primary reasoner.
 
-    Falls back to Claude if Ollama is unavailable.
+    Pipeline:
+        1. If USE_LOCAL_FALLBACK is True, skip Gemini entirely and
+           route to Ollama via _handle_ollama_fallback().
+        2. Scrape web context via DuckDuckGo.
+        3. Send query + web context + screenshot to Gemini Flash
+           via VisionAnalyzer.reason_with_context().
+        4. If Gemini fails, fall back to Ollama.
+        5. If Ollama also fails, escalate to Claude (Tier 3).
 
     Args:
         text: The user's original query.
+        intent: The matched intent name from router.py (for logging).
 
     Returns:
         Aria's response based on web-retrieved content.
     """
+    # ── Local fallback mode (offline / quota conservation) ───────────
+    if USE_LOCAL_FALLBACK:
+        print("[Brain] USE_LOCAL_FALLBACK is True — routing to Ollama.")
+        return _handle_ollama_fallback(text)
+
+    # ── Scrape web context ───────────────────────────────────────────
+    web_context = ""
     try:
         web_context = search_web(text)
+    except Exception as e:
+        print(f"[Brain] Web scrape failed ({e}) — continuing without web context.")
 
-        prompt = (
-            "You are Aria, a helpful and concise personal AI assistant. "
-            "Answer the following question using only the web information provided. "
-            "Be brief — 1 to 3 sentences maximum. Address the user as Chan. "
-            "If the web information does not contain a clear answer, say so.\n\n"
-            "IMPORTANT: Begin every response with a mood tag in square brackets. "
-            "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD]. "
-            "Example: '[HAPPY] Of course, Chan! Here's what I found.'\n\n"
-            f"Web information:\n{web_context}\n\n"
-            f"Question: {text}\n\n"
-            "Answer:"
+    # ── Primary: Gemini Flash (web + screenshot) ─────────────────────
+    try:
+        analyzer = _get_vision_analyzer()
+        if not analyzer.available:
+            raise RuntimeError("Gemini not available.")
+
+        raw = analyzer.reason_with_context(
+            query=text,
+            web_context=web_context,
+            include_screen=True,
         )
-
-        raw = _query_ollama(prompt)
+        print(f"[Brain] Gemini Tier 2 response — {len(raw)} chars.")
         mood, clean_response = _parse_mood_tag(raw)
         _trigger_avatar_mood(mood)
         return clean_response
 
     except Exception as e:
-        print(f"[Brain] Tier 2 failed ({e}) — falling back to Claude.")
-        return _handle_claude(text)
+        print(f"[Brain] Gemini failed ({e}) — falling back to Ollama.")
+
+    # ── Fallback: Ollama local model ─────────────────────────────────
+    return _handle_ollama_fallback(text, web_context=web_context)
 
 
 def _handle_vision(text: str) -> str:
@@ -349,12 +374,22 @@ def _handle_vision(text: str) -> str:
     graceful fallback string. We still parse the mood tag so the
     VTS avatar reacts appropriately.
 
+    If USE_LOCAL_FALLBACK is True, vision queries return a polite
+    decline since Ollama cannot process screenshots.
+
     Args:
         text: The user's original question (e.g. "what do you see?").
 
     Returns:
         Aria's response string, ready for TTS.
     """
+    if USE_LOCAL_FALLBACK:
+        print("[Brain] USE_LOCAL_FALLBACK is True — vision unavailable offline.")
+        return (
+            "I can't see your screen right now, Chan — "
+            "I'm running in offline mode without Gemini."
+        )
+
     print("[Brain] Tier 2 vision — querying Gemini Flash.")
     analyzer = _get_vision_analyzer()
     raw = analyzer.analyse_screen(context=text)
@@ -395,6 +430,51 @@ def _query_ollama(prompt: str) -> str:
     if not result:
         raise ValueError("Ollama returned an empty response.")
     return result
+
+
+def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
+    """Handle a Tier 2 query using Ollama as the offline fallback.
+
+    Called when Gemini is unavailable or USE_LOCAL_FALLBACK is True.
+    If web_context is empty, scrapes it fresh. If Ollama also fails,
+    escalates to Claude (Tier 3).
+
+    Args:
+        text: The user's original query.
+        web_context: Pre-scraped web context. Empty string triggers a fresh scrape.
+
+    Returns:
+        Aria's response string, ready for TTS.
+    """
+    # Scrape web context if not already provided
+    if not web_context:
+        try:
+            web_context = search_web(text)
+        except Exception as e:
+            print(f"[Brain] Web scrape failed in Ollama fallback ({e}).")
+
+    prompt = (
+        "You are Aria, a helpful and concise personal AI assistant. "
+        "Answer the following question using only the web information provided. "
+        "Be brief — 1 to 3 sentences maximum. Address the user as Chan. "
+        "If the web information does not contain a clear answer, say so.\n\n"
+        "IMPORTANT: Begin every response with a mood tag in square brackets. "
+        "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD]. "
+        "Example: '[HAPPY] Of course, Chan! Here's what I found.'\n\n"
+        f"Web information:\n{web_context}\n\n"
+        f"Question: {text}\n\n"
+        "Answer:"
+    )
+
+    try:
+        raw = _query_ollama(prompt)
+        print(f"[Brain] Ollama fallback response — {len(raw)} chars.")
+        mood, clean_response = _parse_mood_tag(raw)
+        _trigger_avatar_mood(mood)
+        return clean_response
+    except Exception as e:
+        print(f"[Brain] Ollama fallback failed ({e}) — escalating to Claude.")
+        return _handle_claude(text)
 
 
 # ── Tier 3 handler ────────────────────────────────────────────────────────────

@@ -9,7 +9,13 @@ ANTHROPIC_API_KEY = "your-anthropic-api-key-here"
 PICOVOICE_API_KEY = "your-picovoice-api-key-here"
 OPENWEATHER_API_KEY = ""  # Optional — currently using web scraping
 
-# --- Ollama (local LLM for Tier 2 reasoning) ---
+# ── Reasoning engine ───────────────────────────────────────────────────────
+# Tier 2 queries use Gemini Flash by default (web scrape + screenshot).
+# USE_LOCAL_FALLBACK = True forces Tier 2 queries through Ollama/Mistral
+# instead of Gemini. Use when offline or conserving Gemini API quota.
+USE_LOCAL_FALLBACK = False
+
+# --- Ollama (local LLM for Tier 2 fallback) ---
 # Run `ollama list` to see which models are installed locally.
 # The model name here must match exactly — a mismatch returns 404.
 OLLAMA_BASE_URL = "http://localhost:11434"
