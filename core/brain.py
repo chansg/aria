@@ -168,26 +168,40 @@ def _select_model(user_input: str) -> str:
 
 # ── Mood tag parsing ─────────────────────────────────────────────────────────
 
-def _parse_mood_tag(text: str) -> tuple[str, str]:
-    """Extract a mood tag from the start of a response string.
+# Valid mood tags — any tag outside this set silently falls back to NEUTRAL.
+# Keeps Ollama/Mistral's invented tags (SORRY, APOLOGETIC, etc.) from
+# producing "Unknown mood" log noise downstream.
+_VALID_MOODS = {"HAPPY", "NEUTRAL", "THINKING", "SURPRISED", "SAD"}
 
-    brain.py prompts the LLM to prefix responses with a mood tag.
-    This function extracts the tag and returns the clean text separately.
+
+def _parse_mood_tag(text: str) -> tuple[str, str]:
+    """Extract and validate a mood tag from an LLM response.
+
+    Parses a [MOOD] prefix from the response. If the tag isn't in the
+    defined valid set, silently returns NEUTRAL (still stripping the
+    bracketed prefix from the spoken text). This handles Ollama and
+    Mistral inventing their own tags despite the system prompt.
 
     Args:
         text: Raw LLM response potentially starting with [MOOD_TAG].
 
     Returns:
-        Tuple of (mood_tag, clean_text). mood_tag is 'NEUTRAL' if none found.
+        Tuple of (mood_tag, clean_text).
+        mood_tag defaults to 'NEUTRAL' if missing or invalid.
 
-    Example:
-        '[HAPPY] Hello Chan!' -> ('HAPPY', 'Hello Chan!')
+    Examples:
+        '[HAPPY] Hello Chan!'    -> ('HAPPY',   'Hello Chan!')
+        '[SORRY] My apologies'   -> ('NEUTRAL', 'My apologies')
+        'No tag here'            -> ('NEUTRAL', 'No tag here')
     """
     match = re.match(r'^\[([A-Z]+)\]\s*', text)
     if match:
-        tag = match.group(1)
+        tag   = match.group(1).upper()
         clean = text[match.end():]
-        return tag, clean
+        if tag in _VALID_MOODS:
+            return tag, clean
+        # Unknown tag — strip bracketed prefix from spoken text, default to NEUTRAL silently
+        return "NEUTRAL", clean
     return "NEUTRAL", text
 
 
@@ -203,6 +217,32 @@ def _trigger_avatar_mood(mood: str) -> None:
             _controller.trigger_mood(mood)
     except Exception:
         pass  # Avatar not connected — continue silently
+
+
+def _ensure_complete_sentence(text: str) -> str:
+    """Append a period if a Tier 2 response ends mid-word.
+
+    Gemini occasionally returns truncated responses (slow API, content
+    filter mid-stream, partial stream). This guard catches the most
+    obvious case — text ending with no sentence-ending punctuation —
+    and appends a period so TTS doesn't speak a dangling fragment.
+
+    Does not fix the upstream Gemini truncation, just sands off the
+    rough edge so Aria sounds intentional rather than glitchy.
+
+    Args:
+        text: Cleaned response text (mood tag already stripped).
+
+    Returns:
+        Text guaranteed to end with sentence-closing punctuation.
+    """
+    if not text:
+        return text
+    text = text.rstrip()
+    if text and text[-1] not in ".!?":
+        print(f"[Brain] Response ends mid-word — appending '.' to ...{text[-20:]!r}")
+        text += "."
+    return text
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
@@ -353,6 +393,7 @@ def _handle_web_query(text: str, intent: str = "") -> str:
         )
         print(f"[Brain] Gemini Tier 2 response — {len(raw)} chars.")
         mood, clean_response = _parse_mood_tag(raw)
+        clean_response = _ensure_complete_sentence(clean_response)
         _trigger_avatar_mood(mood)
         return clean_response
 
@@ -394,6 +435,7 @@ def _handle_vision(text: str) -> str:
     analyzer = _get_vision_analyzer()
     raw = analyzer.analyse_screen(context=text)
     mood, clean_response = _parse_mood_tag(raw)
+    clean_response = _ensure_complete_sentence(clean_response)
     _trigger_avatar_mood(mood)
     return clean_response
 
@@ -479,6 +521,7 @@ def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
         raw = _query_ollama(prompt)
         print(f"[Brain] Ollama fallback response — {len(raw)} chars.")
         mood, clean_response = _parse_mood_tag(raw)
+        clean_response = _ensure_complete_sentence(clean_response)
         _trigger_avatar_mood(mood)
         return clean_response
     except Exception as e:
