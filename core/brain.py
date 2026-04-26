@@ -404,6 +404,14 @@ def _query_ollama(prompt: str) -> str:
     Uses the messages array format required by Ollama 0.6+.
     The /api/generate endpoint was deprecated and returns 404 on newer versions.
 
+    Sets keep_alive: 0 so Mistral unloads from VRAM immediately after
+    inference. Required on the RTX 4070 (12 GB) where Whisper large-v2
+    leaves only ~6.5 GB for the Ollama runner — without this, Mistral
+    stays resident, GPU OOMs on the next inference, and Ollama returns
+    HTTP 500. Trade-off: each Ollama call now reloads the model from
+    disk (~15-20 s on first inference after release), which is why the
+    timeout is bumped from 30 s to 60 s.
+
     Args:
         prompt: Full prompt string including any web context.
 
@@ -421,8 +429,9 @@ def _query_ollama(prompt: str) -> str:
                 {"role": "user", "content": prompt}
             ],
             "stream": False,
+            "keep_alive": 0,   # Unload model after inference — frees VRAM for Whisper
         },
-        timeout=30.0,
+        timeout=60.0,           # First call after VRAM release reloads from disk (~15-20s)
     )
     response.raise_for_status()
     data = response.json()
