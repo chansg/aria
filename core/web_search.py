@@ -22,8 +22,15 @@ from urllib.parse import quote_plus
 from config import DATA_DIR
 
 CACHE_FILE = os.path.join(DATA_DIR, "web_cache.json")
-CACHE_TTL_MINUTES = 15
+CACHE_TTL_MINUTES = 30          # Bumped from 15 to satisfy weather caching spec
 MAX_SNIPPETS = 3
+
+# Weather query keywords — trigger wttr.in path before DuckDuckGo
+_WEATHER_KEYWORDS = (
+    "weather", "temperature", "forecast", "raining",
+    "sunny", "cloudy", "cold", "warm", "hot", "degrees",
+    "snow", "umbrella",
+)
 
 
 # ── Query cleaning ───────────────────────────────────────────────────
@@ -41,25 +48,41 @@ _CONVERSATIONAL_PREFIXES = (
     "search for ", "look up ", "find out ",
 )
 
+# Common Whisper mishear corrections for command words.
+# Multi-word patterns ensure we only correct in command contexts —
+# bare "such" stays untouched ("such a good day" should not be modified),
+# but "such the", "such for" etc. are clearly mistranscribed "search".
+_MISHEAR_CORRECTIONS = {
+    "such the":   "search the",
+    "such for":   "search for",
+    "such about": "search about",
+    "such up":    "look up",
+    "surge the":  "search the",
+    "surge for":  "search for",
+    "searcher":   "search",
+    "surging":    "searching",
+}
+
 
 def clean_query(raw: str) -> str:
-    """Strip Aria name variants and conversational filler from a search query.
+    """Strip Aria name variants, conversational filler, and correct mishears.
 
     Produces a clean, search-engine-friendly query string from raw
-    transcribed speech. Applied before every DuckDuckGo scrape.
+    transcribed speech. Applied before every DuckDuckGo scrape and every
+    wttr.in lookup.
 
     Args:
         raw: Raw transcribed text from the user, e.g.
              'Hello Aria, what is the weather in Slough today?'
 
     Returns:
-        Cleaned query string, e.g. 'weather in Slough today'
+        Cleaned, corrected query string ready for web search.
 
     Examples:
         >>> clean_query('Hello Aria, what is the weather in Slough?')
         'weather in Slough'
-        >>> clean_query('Aria search for latest AI news')
-        'latest AI news'
+        >>> clean_query('Aria such the latest news in AI')
+        'search the latest news in ai'
     """
     text = raw.lower().strip().rstrip("?.,!")
 
@@ -80,30 +103,124 @@ def clean_query(raw: str) -> str:
                 changed = True
                 break
 
+    # Apply Whisper mishear corrections (multi-word patterns to avoid false positives)
+    for wrong, correct in _MISHEAR_CORRECTIONS.items():
+        if wrong in text:
+            text = text.replace(wrong, correct)
+            print(f"[WebSearch] Mishear corrected: '{wrong}' -> '{correct}'")
+
     result = text.strip().rstrip("?.,!")
     print(f"[WebSearch] Cleaned query: '{raw[:50]}' -> '{result}'")
     return result
 
 
+# ── Weather: wttr.in handler ──────────────────────────────────────────
+
+def _fetch_wttr(location: str) -> str:
+    """Fetch weather data from wttr.in for a given location.
+
+    Uses wttr.in's JSON API which returns structured weather data
+    including current conditions and a 3-day forecast. More reliable
+    than scraping DuckDuckGo for weather queries — Gemini gets concrete
+    numbers to reason over instead of HTML snippets.
+
+    Args:
+        location: City or location name extracted from user query.
+
+    Returns:
+        Formatted plain text weather summary, or empty string if fetch fails.
+    """
+    import httpx
+    try:
+        url = f"https://wttr.in/{location}?format=j1"
+        resp = httpx.get(url, timeout=8.0, headers={"User-Agent": "Aria/1.0"})
+        resp.raise_for_status()
+        data = resp.json()
+
+        current   = data["current_condition"][0]
+        temp_c    = current["temp_C"]
+        feels_c   = current["FeelsLikeC"]
+        desc      = current["weatherDesc"][0]["value"]
+        humidity  = current["humidity"]
+        wind_kmph = current["windspeedKmph"]
+
+        today    = data["weather"][0]
+        tomorrow = data["weather"][1]
+
+        today_max     = today["maxtempC"]
+        today_min     = today["mintempC"]
+        tomorrow_max  = tomorrow["maxtempC"]
+        tomorrow_min  = tomorrow["mintempC"]
+        tomorrow_desc = tomorrow["hourly"][4]["weatherDesc"][0]["value"]
+
+        summary = (
+            f"Current weather in {location}: {desc}, {temp_c}°C "
+            f"(feels like {feels_c}°C). Humidity {humidity}%, "
+            f"wind {wind_kmph} km/h. "
+            f"Today: high {today_max}°C, low {today_min}°C. "
+            f"Tomorrow: {tomorrow_desc}, high {tomorrow_max}°C, "
+            f"low {tomorrow_min}°C."
+        )
+
+        print(f"[WebSearch] wttr.in fetch successful for: {location}")
+        return summary
+
+    except Exception as e:
+        print(f"[WebSearch] wttr.in fetch failed ({e}) — falling back to DuckDuckGo.")
+        return ""
+
+
+def _extract_location(query: str) -> str:
+    """Extract a location name from a weather query.
+
+    Looks for patterns like 'in Slough', 'in London tomorrow',
+    'for Birmingham'. Falls back to 'London' if nothing matches.
+
+    Args:
+        query: Cleaned user query string.
+
+    Returns:
+        Extracted location name string.
+    """
+    # Match "in <Location>" or "for <Location>", stopping at time qualifiers
+    match = re.search(
+        r'\b(?:in|for)\s+([A-Za-z][A-Za-z\s]+?)(?:\s+today|\s+tomorrow|\s+this\s+week|\s+now|$)',
+        query,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip().title()
+
+    # Fall back: standalone capitalised non-stopword
+    stopwords = {"aria", "what", "tell", "search", "find", "weather",
+                 "the", "is", "in", "for", "today", "tomorrow"}
+    for word in query.split():
+        if word and word[0].isupper() and word.lower() not in stopwords:
+            return word
+
+    return "London"  # default fallback
+
+
 # ── Public entry point ────────────────────────────────────────────────
 
 def search_web(query: str) -> str:
-    """Search the web for a query using DuckDuckGo and return plain text results.
+    """Search the web for a query and return plain text results.
 
-    Scrapes the DuckDuckGo HTML endpoint and extracts the top 3 result
-    snippets as clean plain text. Results are cached for 15 minutes.
+    For weather queries, fetches from wttr.in directly for structured data.
+    For all other queries, scrapes the DuckDuckGo HTML endpoint and extracts
+    the top 3 result snippets. Results are cached for CACHE_TTL_MINUTES.
 
-    The raw query is cleaned first — Aria name variants and conversational
-    filler are stripped to produce a search-engine-friendly string.
+    The raw query is cleaned first — Aria name variants, conversational
+    filler, and known Whisper mishears are normalised before lookup.
 
     Args:
         query: Natural language search query from the user.
 
     Returns:
-        Plain text string containing the top search result snippets,
-        or an error message string if scraping fails.
+        Plain text string for Gemini to reason over,
+        or a graceful error string if every backend fails.
     """
-    query = clean_query(query)  # Strip name and conversational filler
+    query = clean_query(query)  # Strip name, filler, mishears
     cache_key = _cache_key(query)
     cache = _load_cache()
 
@@ -112,18 +229,25 @@ def search_web(query: str) -> str:
         print(f"[WebSearch] Returning cached result for: {query[:50]}")
         return cache[cache_key]["result"]
 
-    print(f"[WebSearch] Scraping DuckDuckGo for: {query[:50]}...")
+    # Weather queries → wttr.in for structured data
+    is_weather = any(kw in query.lower() for kw in _WEATHER_KEYWORDS)
+    result = ""
+    if is_weather:
+        location = _extract_location(query)
+        result = _fetch_wttr(location)
 
-    # Try Playwright first, fall back to httpx
-    try:
-        result = _scrape_ddg_playwright(query)
-    except Exception as e:
-        print(f"[WebSearch] Playwright failed ({e}), falling back to httpx...")
+    # Fall back to DuckDuckGo if wttr.in failed or query is non-weather
+    if not result:
+        print(f"[WebSearch] Scraping DuckDuckGo for: {query[:50]}...")
         try:
-            result = _scrape_ddg_httpx(query)
-        except Exception as e2:
-            print(f"[WebSearch] httpx fallback also failed: {e2}")
-            return f"Sorry Chan, I couldn't find results for that query right now."
+            result = _scrape_ddg_playwright(query)
+        except Exception as e:
+            print(f"[WebSearch] Playwright failed ({e}), falling back to httpx...")
+            try:
+                result = _scrape_ddg_httpx(query)
+            except Exception as e2:
+                print(f"[WebSearch] httpx fallback also failed: {e2}")
+                return "Sorry Chan, I couldn't find results for that query right now."
 
     if not result or not result.strip():
         return "I searched but didn't find any relevant results, Chan."

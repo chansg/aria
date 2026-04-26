@@ -267,7 +267,8 @@ On first run:
 | Issue | Reason | Resolution |
 |-------|--------|------------|
 | Kokoro-82M TTS | `kokoro>=0.8` and `misaki>=0.7.5` dropped Python 3.13 support | Revisit when upstream restores 3.13 compatibility |
-| Weather via DuckDuckGo | HTML endpoint returns limited weather data | Gemini reasons over partial results — accuracy varies |
+| Weather via DuckDuckGo | HTML endpoint returns limited weather data | ✅ Fixed — wttr.in now used directly for weather queries |
+| Gemini partial responses | Occasional mid-word cut-off from API | Mitigated via `_ensure_complete_sentence()` guard in `brain.py`; root cause upstream |
 
 ---
 
