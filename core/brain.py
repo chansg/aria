@@ -177,10 +177,19 @@ _VALID_MOODS = {"HAPPY", "NEUTRAL", "THINKING", "SURPRISED", "SAD"}
 def _parse_mood_tag(text: str) -> tuple[str, str]:
     """Extract and validate a mood tag from an LLM response.
 
-    Parses a [MOOD] prefix from the response. If the tag isn't in the
-    defined valid set, silently returns NEUTRAL (still stripping the
-    bracketed prefix from the spoken text). This handles Ollama and
-    Mistral inventing their own tags despite the system prompt.
+    Parses a `[MOOD]` prefix from the response and ALWAYS strips the
+    bracketed prefix from the spoken text — even when the tag is
+    unknown or stylised — so brackets never reach TTS.
+
+    Tolerant of common Mistral/Claude formatting quirks:
+        - Mixed or lowercase tags: `[Neutral]`, `[neutral]`
+        - Markdown wrappers:       `**[NEUTRAL]**`
+        - Leading whitespace:      `\\n[NEUTRAL] hi`
+        - Plus signs / hyphens in tag names: `[VERY-HAPPY]`
+
+    If no recognisable bracket pattern is found at the start of the
+    text, the text is returned unchanged with NEUTRAL — the LLM simply
+    forgot the tag, but there's nothing to strip.
 
     Args:
         text: Raw LLM response potentially starting with [MOOD_TAG].
@@ -191,16 +200,27 @@ def _parse_mood_tag(text: str) -> tuple[str, str]:
 
     Examples:
         '[HAPPY] Hello Chan!'    -> ('HAPPY',   'Hello Chan!')
+        '[Neutral] hello'        -> ('NEUTRAL', 'hello')
+        '**[NEUTRAL]** hi'       -> ('NEUTRAL', 'hi')
         '[SORRY] My apologies'   -> ('NEUTRAL', 'My apologies')
         'No tag here'            -> ('NEUTRAL', 'No tag here')
     """
-    match = re.match(r'^\[([A-Z]+)\]\s*', text)
+    # Allow leading whitespace, optional markdown bold/italic wrappers,
+    # and ANY bracketed content — the _VALID_MOODS check decides whether
+    # to fire a hotkey, but we always strip the bracket from spoken text
+    # so TTS never reads "[NEUTRAL]" literally aloud.
+    match = re.match(r'^\s*[*_]{0,3}\[([^\]\n]+)\][*_]{0,3}\s*', text)
     if match:
-        tag   = match.group(1).upper()
-        clean = text[match.end():]
+        # Extract a tag word for the whitelist check: take the last
+        # alphabetic token inside the brackets (handles "Mood: Neutral").
+        raw_tag = match.group(1)
+        tokens  = re.findall(r'[A-Za-z]+', raw_tag)
+        tag     = tokens[-1].upper() if tokens else ""
+        clean   = text[match.end():]
         if tag in _VALID_MOODS:
             return tag, clean
-        # Unknown tag — strip bracketed prefix from spoken text, default to NEUTRAL silently
+        # Unknown / no recognisable tag — strip bracketed prefix anyway,
+        # default to NEUTRAL silently so brackets never reach TTS.
         return "NEUTRAL", clean
     return "NEUTRAL", text
 
