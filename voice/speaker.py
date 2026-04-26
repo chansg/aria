@@ -78,10 +78,61 @@ def _clean_for_speech(text: str) -> str:
     return text
 
 
+def _split_into_sentences(text: str, max_chunk: int = 300) -> list[str]:
+    """Split text into speakable sentence chunks for Piper TTS.
+
+    Splits at sentence boundaries to produce natural speech rhythm.
+    Chunks exceeding max_chunk characters are split at the nearest
+    comma or clause boundary to prevent timeout issues.
+
+    Args:
+        text: Full response text to split.
+        max_chunk: Maximum characters per chunk before forced split.
+
+    Returns:
+        List of sentence strings ready for sequential TTS synthesis.
+    """
+    # Split on sentence-ending punctuation
+    raw = re.split(r'(?<=[.!?])\s+', text.strip())
+    chunks = []
+    current = ""
+
+    for sentence in raw:
+        if len(current) + len(sentence) <= max_chunk:
+            current += (" " if current else "") + sentence
+        else:
+            if current:
+                chunks.append(current.strip())
+            # If single sentence is too long, split at comma
+            if len(sentence) > max_chunk:
+                sub = re.split(r'(?<=,)\s+', sentence)
+                sub_chunk = ""
+                for part in sub:
+                    if len(sub_chunk) + len(part) <= max_chunk:
+                        sub_chunk += (" " if sub_chunk else "") + part
+                    else:
+                        if sub_chunk:
+                            chunks.append(sub_chunk.strip())
+                        sub_chunk = part
+                if sub_chunk:
+                    chunks.append(sub_chunk.strip())
+                current = ""
+            else:
+                current = sentence
+
+    if current:
+        chunks.append(current.strip())
+
+    return [c for c in chunks if c.strip()]
+
+
 def speak(text: str) -> None:
     """Synthesise text to speech and play it via sounddevice.
 
-    Strips markdown formatting and speaks the full response.
+    Long responses are split into sentence chunks and spoken
+    sequentially to prevent TTS timeout and mid-sentence cut-off.
+    Markdown is stripped before synthesis.
+
     Updates avatar state to 'speaking' during playback with
     amplitude-synced lip movement, then back to 'idle' when finished.
     Falls back to terminal print if TTS or playback fails.
@@ -92,12 +143,12 @@ def speak(text: str) -> None:
     if not text or not text.strip():
         return
 
-    # Warn on very long responses but still speak the full text
-    if len(text) > 1500:
-        print(f"[Aria] Long response ({len(text)} chars) — speaking full text.")
-
     # Strip markdown formatting before synthesis
     text = _clean_for_speech(text)
+    chunks = _split_into_sentences(text)
+
+    print(f"[Speaker] Speaking {len(chunks)} chunk(s), "
+          f"{len(text)} total chars.")
 
     # Update avatar state (imported here to avoid circular imports)
     try:
@@ -106,14 +157,16 @@ def speak(text: str) -> None:
     except ImportError:
         set_speaking = set_idle = set_amplitude = None
 
-    try:
-        _speak_sync(text)
-    except FileNotFoundError as e:
-        print(f"[Aria] ERROR: {e}")
-        print(f"[Aria] (text): {text}")
-    except Exception as e:
-        print(f"[Aria] ERROR: TTS failed — {e}")
-        print(f"[Aria] (text): {text}")
+    for i, chunk in enumerate(chunks):
+        try:
+            _speak_sync(chunk)
+        except FileNotFoundError as e:
+            print(f"[Speaker] ERROR on chunk {i+1}/{len(chunks)}: {e}")
+            print(f"[Speaker] (text): {chunk}")
+            break
+        except Exception as e:
+            print(f"[Speaker] ERROR on chunk {i+1}/{len(chunks)}: {e}")
+            print(f"[Speaker] (text): {chunk}")
 
     try:
         from avatar.renderer import set_idle, set_amplitude

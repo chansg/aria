@@ -136,6 +136,86 @@ class VisionAnalyzer:
 
         return reply.strip()
 
+    def reason_with_context(
+        self,
+        query: str,
+        web_context: str = "",
+        include_screen: bool = True,
+    ) -> str:
+        """Send query, web context, and optionally the screen to Gemini.
+
+        This is the unified Tier 2 reasoning call. Gemini receives:
+          - The user's original query
+          - Raw web scrape results (if available)
+          - The current screenshot (if screen capture is running)
+
+        Gemini synthesises all inputs into a single coherent response,
+        eliminating the need for separate weather, web, or gaming handlers.
+
+        Args:
+            query: The user's original natural language query.
+            web_context: Raw text from DuckDuckGo scrape. Empty string if
+                         no web context is needed or scrape failed.
+            include_screen: Whether to include latest.png in the request.
+                            Set False for pure text queries with no screen
+                            relevance.
+
+        Returns:
+            Gemini's response as plain text for Aria to speak.
+
+        Raises:
+            RuntimeError: If Gemini is unavailable or the call fails.
+        """
+        if not self.available:
+            raise RuntimeError("Gemini not available — API key missing or SDK not installed.")
+
+        content_parts = []
+
+        # Include screenshot if available and recent enough
+        if include_screen:
+            screenshot = self._load_screenshot()
+            if screenshot is not None:
+                age = self._get_screenshot_age_seconds()
+                if age is not None and age < 60:
+                    content_parts.append(screenshot)
+                    print(f"[Vision] Including screenshot ({age:.0f}s old) in Gemini request.")
+                else:
+                    print(f"[Vision] Screenshot too old ({age:.0f}s) — skipping from request.")
+
+        # Build the unified prompt
+        prompt_parts = [
+            "You are Aria, a smart personal AI assistant for Chan. "
+            "Be concise — 1 to 3 sentences maximum. Conversational and direct. "
+            "Do not use markdown formatting. Address the user as Chan.\n\n"
+            "IMPORTANT: Begin your response with a mood tag in square brackets. "
+            "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD].\n\n"
+        ]
+
+        if web_context:
+            prompt_parts.append(
+                f"Web search results for context:\n{web_context}\n\n"
+            )
+
+        prompt_parts.append(f"User query: {query}\n\nAnswer:")
+        content_parts.append("".join(prompt_parts))
+
+        try:
+            response = self._client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=content_parts,
+                config={
+                    "max_output_tokens": MAX_OUTPUT_TOKENS,
+                    "temperature": 0.7,
+                    "http_options": {"timeout": REQUEST_TIMEOUT * 1000},
+                },
+            )
+            result = getattr(response, "text", "") or ""
+            result = result.strip()
+            print(f"[Vision] Gemini unified response — {len(result)} chars.")
+            return result
+        except Exception as e:
+            raise RuntimeError(f"Gemini reasoning failed: {e}")
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _configure(self) -> None:
