@@ -205,32 +205,6 @@ def _trigger_avatar_mood(mood: str) -> None:
         pass  # Avatar not connected — continue silently
 
 
-def _ensure_complete_sentence(text: str) -> str:
-    """Append a period if a Gemini response ends mid-word.
-
-    Gemini occasionally returns truncated responses (slow API, content
-    filter mid-stream, partial stream). This guard catches the most
-    obvious case — text ending with no sentence-ending punctuation —
-    and appends a period so TTS doesn't speak a dangling fragment.
-
-    Does not fix the upstream Gemini truncation, just sands off the
-    rough edge so Aria sounds intentional rather than glitchy.
-
-    Args:
-        text: Cleaned response text (mood tag already stripped).
-
-    Returns:
-        Text guaranteed to end in '.', '!', or '?'.
-    """
-    text = text.rstrip()
-    if not text:
-        return text
-    if text[-1] not in ".!?":
-        print(f"[Brain] Gemini response ends mid-word — appending '.' to {text[-20:]!r}")
-        text += "."
-    return text
-
-
 # ── Tool execution ────────────────────────────────────────────────────────────
 
 def _execute_tool(tool_name: str, tool_input: dict) -> str:
@@ -379,7 +353,6 @@ def _handle_web_query(text: str, intent: str = "") -> str:
         )
         print(f"[Brain] Gemini Tier 2 response — {len(raw)} chars.")
         mood, clean_response = _parse_mood_tag(raw)
-        clean_response = _ensure_complete_sentence(clean_response)
         _trigger_avatar_mood(mood)
         return clean_response
 
@@ -421,7 +394,6 @@ def _handle_vision(text: str) -> str:
     analyzer = _get_vision_analyzer()
     raw = analyzer.analyse_screen(context=text)
     mood, clean_response = _parse_mood_tag(raw)
-    clean_response = _ensure_complete_sentence(clean_response)
     _trigger_avatar_mood(mood)
     return clean_response
 
@@ -498,7 +470,6 @@ def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
         raw = _query_ollama(prompt)
         print(f"[Brain] Ollama fallback response — {len(raw)} chars.")
         mood, clean_response = _parse_mood_tag(raw)
-        clean_response = _ensure_complete_sentence(clean_response)
         _trigger_avatar_mood(mood)
         return clean_response
     except Exception as e:
