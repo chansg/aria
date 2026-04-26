@@ -5,19 +5,9 @@
 # See config.py for the full list of settings. The constants below
 # are the ones most likely to need editing on a new machine.
 
-import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file (kept out of git)
-load_dotenv()
-
-# ── API Keys — load from .env, never hardcode ─────────────────────────────────
-# Copy .env.example to .env and fill in your keys.
-# NEVER commit .env to git.
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
-PICOVOICE_API_KEY = os.getenv("PICOVOICE_API_KEY", "")
-HF_TOKEN          = os.getenv("HF_TOKEN", "")
+ANTHROPIC_API_KEY = "your-anthropic-api-key-here"
+PICOVOICE_API_KEY = "your-picovoice-api-key-here"
+OPENWEATHER_API_KEY = ""  # Optional — currently using web scraping
 
 # ── Reasoning engine ───────────────────────────────────────────────────────
 # Tier 2 queries use Gemini Flash by default (web scrape + screenshot).
@@ -33,9 +23,7 @@ OLLAMA_MODEL = "mistral"
 
 # --- Conversation / Prompt Limits ---
 MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
-# MAX_SPEAK_LENGTH is deprecated — speaker.py uses sentence-based chunking only.
-# Kept here to avoid import errors in any legacy references.
-MAX_SPEAK_LENGTH = 9999       # effectively disabled
+MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
 TRANSCRIPTION_TIMEOUT = 15    # Seconds before aborting a Whisper transcription
 
 # ── VTube Studio — Hiyori_A Model Configuration ───────────────────────────────
