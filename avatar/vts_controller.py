@@ -44,7 +44,8 @@ DEFAULT_STATE_HOTKEYS = {
     "idle":      None,           # Base state — Hiyori rests naturally
     "listening": "hiyori_m05",   # Active listening expression
     "thinking":  "hiyori_m03",   # Pensive, looking to the side
-    "dormant":   None,           # Sleeping — no hotkey at this stage
+    "speaking":  "hiyori_m01",   # Engaged/cheerful while talking (was None)
+    "dormant":   None,           # Sleeping — no hotkey configured yet
 }
 
 # ── Mood tag to hotkey mapping — Hiyori_A model ──────────────────────────────
@@ -79,18 +80,19 @@ class VTSController:
         self._thread: Optional[threading.Thread] = None
         self.connected: bool = False
 
-        # Load hotkey mappings from config if available
+        # Load hotkey mappings from config if available.
+        # User's config.py values override defaults — but missing keys (e.g. a
+        # newly-added "speaking" state) fall back to DEFAULT_STATE_HOTKEYS so
+        # we don't force a config.py edit every time a new state is introduced.
         try:
             import config
-            self.state_hotkeys = getattr(
-                config, "VTS_STATE_HOTKEYS", DEFAULT_STATE_HOTKEYS
-            )
-            self.mood_hotkeys = getattr(
-                config, "VTS_MOOD_HOTKEYS", DEFAULT_MOOD_HOTKEYS
-            )
+            user_states = getattr(config, "VTS_STATE_HOTKEYS", {}) or {}
+            user_moods  = getattr(config, "VTS_MOOD_HOTKEYS", {}) or {}
+            self.state_hotkeys = {**DEFAULT_STATE_HOTKEYS, **user_states}
+            self.mood_hotkeys  = {**DEFAULT_MOOD_HOTKEYS,  **user_moods}
         except ImportError:
-            self.state_hotkeys = DEFAULT_STATE_HOTKEYS
-            self.mood_hotkeys = DEFAULT_MOOD_HOTKEYS
+            self.state_hotkeys = dict(DEFAULT_STATE_HOTKEYS)
+            self.mood_hotkeys  = dict(DEFAULT_MOOD_HOTKEYS)
 
     def start(self) -> None:
         """Start the background asyncio event loop and connect to VTS.
@@ -115,26 +117,46 @@ class VTSController:
     def set_state(self, state: str) -> None:
         """Trigger a VTS hotkey corresponding to an Aria avatar state.
 
+        Intentionally-None states (idle, dormant) are silent — they exist
+        in the mapping but produce no log noise on every interaction.
+        Only logs when a state name is genuinely unknown or the
+        WebSocket isn't connected yet.
+
         Args:
-            state: One of 'idle', 'listening', 'thinking', 'dormant'.
+            state: One of 'idle', 'listening', 'thinking', 'speaking', 'dormant'.
         """
-        hotkey = self.state_hotkeys.get(state)
-        if hotkey and self.connected:
-            self._submit(self._trigger_hotkey(hotkey))
-        else:
-            print(f"[VTS] State '{state}' — no hotkey mapped or not connected.")
+        if state not in self.state_hotkeys:
+            print(f"[VTS] Unknown state '{state}' — not in state_hotkeys map.")
+            return
+
+        hotkey = self.state_hotkeys[state]
+        if hotkey is None:
+            return  # Intentionally unmapped — silent
+
+        if not self.connected:
+            return  # Avatar not connected — silent (set_state fires often)
+
+        self._submit(self._trigger_hotkey(hotkey))
 
     def trigger_mood(self, mood: str) -> None:
         """Trigger a VTS hotkey for a mood tag from brain.py.
 
+        Intentionally-None moods (NEUTRAL) are silent — they exist
+        in the mapping but produce no log noise.
+
         Args:
             mood: One of 'HAPPY', 'NEUTRAL', 'THINKING', 'SURPRISED', 'SAD'.
         """
-        hotkey = self.mood_hotkeys.get(mood.upper())
-        if hotkey and self.connected:
-            self._submit(self._trigger_hotkey(hotkey))
-        else:
-            print(f"[VTS] Mood '{mood}' — no hotkey mapped or not connected.")
+        key = mood.upper()
+        if key not in self.mood_hotkeys:
+            print(f"[VTS] Unknown mood '{mood}' — not in mood_hotkeys map.")
+            return
+
+        hotkey = self.mood_hotkeys[key]
+        if hotkey is None or not self.connected:
+            return  # Intentionally unmapped or not connected — silent
+
+        self._submit(self._trigger_hotkey(hotkey))
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

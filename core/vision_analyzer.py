@@ -250,16 +250,36 @@ class VisionAnalyzer:
     def _load_screenshot(self):
         """Load `data/captures/latest.png` as a PIL Image.
 
+        Reads the file into a bytes buffer first and validates its size
+        before decoding. Combined with the atomic write-then-rename in
+        screen_capture.py, this guarantees Gemini never receives a
+        partially-written PNG (the cause of "image file is truncated"
+        errors).
+
         Returns:
-            A PIL.Image.Image, or None if the file is missing / unreadable.
+            A PIL.Image.Image, or None if the file is missing /
+            unreadable / partial.
         """
         if not LATEST_SCREENSHOT.exists():
             print(f"[Vision] No screenshot at {LATEST_SCREENSHOT}")
             return None
 
         try:
+            import io
             from PIL import Image
-            return Image.open(LATEST_SCREENSHOT)
+
+            with open(LATEST_SCREENSHOT, "rb") as f:
+                buf = f.read()
+
+            # Sanity check — anything under 1 KB is almost certainly a
+            # partial write that slipped past the atomic rename.
+            if len(buf) < 1024:
+                print(f"[Vision] Screenshot too small ({len(buf)} bytes) — likely partial write. Skipping.")
+                return None
+
+            img = Image.open(io.BytesIO(buf))
+            img.load()  # Force decode now so any truncation surfaces here, not in Gemini
+            return img
         except Exception as e:
             print(f"[Vision] Failed to open screenshot: {e}")
             return None

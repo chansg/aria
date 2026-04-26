@@ -34,7 +34,8 @@ VTS_STATE_HOTKEYS = {
     "idle":      None,           # Base state — no hotkey, Hiyori rests naturally
     "listening": "hiyori_m05",   # Active listening expression
     "thinking":  "hiyori_m03",   # Pensive, looking to the side
-    "dormant":   None,           # Sleeping — no hotkey at this stage
+    "speaking":  "hiyori_m01",   # Engaged/cheerful while talking
+    "dormant":   None,           # Sleeping — no hotkey configured yet
 }
 
 VTS_MOOD_HOTKEYS = {

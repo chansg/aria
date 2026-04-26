@@ -131,6 +131,11 @@ class ScreenCapture:
         COMPRESS_MAX_HEIGHT before saving, keeping per-frame payloads
         small enough for Gemini Flash vision calls.
 
+        latest.png is updated atomically — written to a .tmp file first
+        and then renamed via os.replace(). This prevents Gemini's
+        vision_analyzer reader from ever seeing a partially-written PNG
+        (the cause of "image file is truncated" errors).
+
         Args:
             sct: Active mss instance.
             monitor: Monitor dict from mss.monitors.
@@ -145,9 +150,13 @@ class ScreenCapture:
         # Compress: mss returns BGRA; PIL wants RGB
         compressed = self._compress_screenshot(screenshot)
 
-        # Save timestamped frame + latest.png
-        compressed.save(filename,    format="PNG", optimize=True, compress_level=PNG_COMPRESS_LEVEL)
-        compressed.save(LATEST_PATH, format="PNG", optimize=True, compress_level=PNG_COMPRESS_LEVEL)
+        # Timestamped frame — direct write is fine, nothing else reads these
+        compressed.save(filename, format="PNG", optimize=True, compress_level=PNG_COMPRESS_LEVEL)
+
+        # latest.png — atomic write-then-rename to avoid race with vision_analyzer
+        latest_tmp = LATEST_PATH.with_suffix(".png.tmp")
+        compressed.save(latest_tmp, format="PNG", optimize=True, compress_level=PNG_COMPRESS_LEVEL)
+        os.replace(latest_tmp, LATEST_PATH)  # atomic on Windows + Unix
 
         size_kb = filename.stat().st_size / 1024
         print(f"[Capture] Frame {self.frame_count} saved → {filename.name} ({size_kb:.0f} KB)")
