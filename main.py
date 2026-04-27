@@ -20,6 +20,17 @@ Usage:
 
 import sys
 import threading
+
+# When Aria is launched via `python main.py`, this script is registered in
+# sys.modules as '__main__' only. core.brain._handle_analysis_toggle does
+# `from main import _proactive_analyst`, which would otherwise force Python
+# to re-import main.py as a SECOND, separate `main` module — with all the
+# top-level state freshly re-initialised (so `_proactive_analyst = None`).
+# Aliasing __main__ → 'main' here means both names resolve to the same
+# module object, so brain.py sees the live analyst instance.
+if __name__ == "__main__":
+    sys.modules.setdefault("main", sys.modules[__name__])
+
 from voice.listener import record_audio, get_audio_devices, calibrate_silence
 from voice.transcriber import load_model, transcribe_audio
 from voice.wake import listen_for_wake_word
@@ -433,8 +444,14 @@ def run_aria():
             trigger_mood_fn=_analyst_trigger_mood,
         )
         _proactive_analyst.start()
+        # Definitive confirmation — if this line appears, the analyst object
+        # exists, the daemon thread is running, and brain.py can reach it.
+        print("[Analyst] Startup confirmed.")
     except Exception as e:
-        print(f"[Analyst] WARNING: Could not start proactive analyst — {e}")
+        # Loud and unambiguous so the line cannot be lost in startup noise.
+        print(f"[Analyst] FAILED to start: {e}")
+        import traceback
+        traceback.print_exc()
         _proactive_analyst = None
     print()
 
