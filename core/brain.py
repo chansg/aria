@@ -343,6 +343,8 @@ def think(user_input: str) -> str:
             response = handle_date()
         elif intent == "calendar":
             response = handle_calendar()
+        elif intent == "analysis_mode":
+            response = _handle_analysis_toggle(user_input)
         else:
             response = handle_time()  # fallback
 
@@ -365,6 +367,47 @@ def think(user_input: str) -> str:
     store_episodic("aria", response)
     record_interaction()
     return response
+
+
+# ── Tier 1 — analysis mode toggle ─────────────────────────────────────────────
+
+def _handle_analysis_toggle(text: str) -> str:
+    """Handle the proactive-analysis mode toggle command.
+
+    Routes to the global ProactiveAnalyst instance owned by main.py.
+    The analyst speaks its own confirmation aloud — this handler returns
+    an empty string so think() doesn't double-speak.
+
+    Args:
+        text: The user's original query (used to detect on/off intent).
+
+    Returns:
+        Empty string on success — analyst speaks its own confirmation.
+        A short error string only if the analyst module is unreachable.
+    """
+    text_lower = text.lower()
+    on_keywords  = ("on", "enable", "start", "activate")
+    off_keywords = ("off", "disable", "stop", "deactivate")
+
+    try:
+        # main is imported lazily to avoid a circular import at module load.
+        from main import _proactive_analyst
+        if _proactive_analyst is None:
+            return "The analyst module isn't running, Chan."
+
+        if any(kw in text_lower for kw in on_keywords):
+            _proactive_analyst.enable()
+        elif any(kw in text_lower for kw in off_keywords):
+            _proactive_analyst.disable()
+        else:
+            _proactive_analyst.toggle()
+
+    except ImportError:
+        return "I couldn't reach the analyst module, Chan."
+    except Exception as e:
+        print(f"[Brain] Analysis toggle error: {e}")
+
+    return ""  # Analyst speaks its own confirmation
 
 
 # ── Tier 2 handler ────────────────────────────────────────────────────────────

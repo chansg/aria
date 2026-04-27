@@ -53,6 +53,14 @@ INTENT_MAP: dict[str, dict] = {
             "what's on today", "agenda",
         ],
     },
+    "analysis_mode": {
+        "tier": 1,
+        "keywords": [
+            "analysis mode on",  "enable analysis",  "start analysis",
+            "analysis mode off", "disable analysis", "stop analysis",
+            "analysis mode",     "toggle analysis",
+        ],
+    },
 
     # Tier 2 — web + Ollama, free
     "weather": {

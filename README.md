@@ -256,9 +256,11 @@ On first run:
 | 12 | VTube Studio hotkeys — Hiyori_A mood expressions | ✅ |
 | 13 | Gemini unified Tier 2 — web + screen multimodal | ✅ |
 | 14 | Kokoro-82M TTS | ⏸ Deferred — Python 3.13 incompatibility |
-| 15 | Stage 3 — proactive gameplay commentary | 🔄 Planned |
-| 16 | Memory upgrade — FAISS semantic search | 🔄 Planned |
-| 17 | Voice recognition training | 🔄 Planned |
+| 15 | Stage 3a — Proactive Analyst Loop | ✅ Complete |
+| 16 | Stage 3b — Notification state + queued insights | 🔄 Planned |
+| 17 | Stage 3c — Finance specialisation | 🔄 Planned |
+| 18 | Memory upgrade — FAISS semantic search | 🔄 Planned |
+| 19 | Voice recognition training | 🔄 Planned |
 
 ---
 

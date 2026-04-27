@@ -37,6 +37,7 @@ from avatar.renderer import (
 )
 from voice.trainer import run_calibration, get_profile_summary
 from core.screen_capture import ScreenCapture
+from core.proactive_analyst import ProactiveAnalyst
 
 # Name variants Whisper might produce (case-insensitive matching)
 # Expanded for large-v2 + British accent phonetic variants
@@ -124,6 +125,45 @@ def toggle_free_conversation() -> bool:
 
 # ── Module-level screen capture instance ──────────────────────────
 _screen_capture: ScreenCapture | None = None
+
+# ── Module-level proactive analyst instance (Stage 3a) ────────────
+# Accessed by core.brain._handle_analysis_toggle to flip analysis mode
+# from a voice command. Stays None if Gemini isn't configured.
+_proactive_analyst: ProactiveAnalyst | None = None
+
+
+def _analyst_set_state(state: str) -> None:
+    """Forward a state-name string to the avatar renderer's setter.
+
+    Used by ProactiveAnalyst — keeps the analyst module decoupled from
+    the renderer's state-specific function names.
+
+    Args:
+        state: One of 'idle', 'listening', 'thinking', 'speaking', 'dormant'.
+    """
+    if state == "idle":
+        set_idle()
+    elif state == "thinking":
+        set_thinking()
+    elif state == "listening":
+        set_listening()
+    elif state == "dormant":
+        set_dormant()
+    # 'speaking' is handled inside speak() — analyst doesn't need to fire it
+
+
+def _analyst_trigger_mood(mood: str) -> None:
+    """Trigger a VTS mood hotkey from the analyst, if VTS is connected.
+
+    Args:
+        mood: Mood tag (e.g. 'THINKING', 'HAPPY').
+    """
+    try:
+        from avatar.renderer import _controller
+        if _controller:
+            _controller.trigger_mood(mood)
+    except Exception:
+        pass  # VTS not connected — continue silently
 
 
 def print_banner():
@@ -323,6 +363,8 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
         shutdown_scheduler()
         if _screen_capture:
             _screen_capture.stop()
+        if _proactive_analyst:
+            _proactive_analyst.stop()
         avatar.close()
 
 
@@ -380,6 +422,21 @@ def run_aria():
 
     # Create avatar (connects to VTube Studio in background)
     avatar = create_avatar(on_mode_toggle=toggle_conversation_mode)
+
+    # Initialise proactive analyst (Stage 3a)
+    # Defaults to OFF — user opts in via "Aria, analysis mode on".
+    global _proactive_analyst
+    try:
+        _proactive_analyst = ProactiveAnalyst(
+            speak_fn=speak,
+            set_state_fn=_analyst_set_state,
+            trigger_mood_fn=_analyst_trigger_mood,
+        )
+        _proactive_analyst.start()
+    except Exception as e:
+        print(f"[Analyst] WARNING: Could not start proactive analyst — {e}")
+        _proactive_analyst = None
+    print()
 
     # Launch voice pipeline in a background thread
     pipeline_thread = threading.Thread(
