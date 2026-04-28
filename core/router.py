@@ -92,6 +92,13 @@ INTENT_MAP: dict[str, dict] = {
             "describe what you see", "see my screen",
             "looking at my screen", "what do you observe",
             "tell me what you see",
+            # Productivity and evaluation queries
+            "is this good", "is this a good", "evaluate what you see",
+            "what do you think of this", "review what you see", "review my screen",
+            "what do you make of this", "give me feedback", "is this correct",
+            "check this for me", "look at this and tell me",
+            "what do you think about what you see",
+            "does this look right", "any issues with this", "spot anything wrong",
         ],
     },
 

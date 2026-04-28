@@ -165,18 +165,31 @@ class ProactiveAnalyst:
         print("[Analyst] Proactive analyst stopped.")
 
     def enable(self) -> None:
-        """Enable analysis mode — Aria will speak proactive insights."""
+        """Enable analysis mode — Aria will speak proactive insights.
+
+        Prints the spoken confirmation explicitly. The analyst speaks
+        via the injected speak_fn (bypassing the normal voice-pipeline
+        print path), so without this print the terminal shows a bare
+        '[Aria]' followed by a blank line.
+        """
         with self._lock:
             self.enabled = True
         print("[Analyst] Analysis mode: ON")
-        self._speak("Analysis mode on, Chan. I'll let you know if I spot anything worth flagging.")
+        confirmation = "Analysis mode on, Chan. I'll let you know if I spot anything worth flagging."
+        print(f"[Aria] {confirmation}")
+        self._speak(confirmation)
 
     def disable(self) -> None:
-        """Disable analysis mode — Aria stays silent proactively."""
+        """Disable analysis mode — Aria stays silent proactively.
+
+        Prints the spoken confirmation explicitly (see enable() for why).
+        """
         with self._lock:
             self.enabled = False
         print("[Analyst] Analysis mode: OFF")
-        self._speak("Analysis mode off, Chan. I'll stay quiet unless you ask me something.")
+        confirmation = "Analysis mode off, Chan. I'll stay quiet unless you ask me something."
+        print(f"[Aria] {confirmation}")
+        self._speak(confirmation)
 
     def toggle(self) -> bool:
         """Toggle analysis mode on or off.
