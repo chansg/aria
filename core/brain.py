@@ -47,6 +47,9 @@ from core.memory import store_episodic, build_memory_context
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
 from core.web_search import search_web
 from core.vision_analyzer import VisionAnalyzer
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 # ── Lazy singleton for Gemini vision ──────────────────────────────────────────
@@ -161,7 +164,7 @@ def _select_model(user_input: str) -> str:
     lowered = user_input.lower()
     word_count = len(lowered.split())
     if word_count > 25 or any(kw in lowered for kw in COMPLEX_QUERY_KEYWORDS):
-        print(f"[Brain] Complex query detected — using {ANTHROPIC_MODEL}")
+        log.info("Complex query detected — using %s", ANTHROPIC_MODEL)
         return ANTHROPIC_MODEL
     return ANTHROPIC_MODEL_LITE
 
@@ -260,7 +263,7 @@ def _ensure_complete_sentence(text: str) -> str:
         return text
     text = text.rstrip()
     if text and text[-1] not in ".!?":
-        print(f"[Brain] Response ends mid-word — appending '.' to ...{text[-20:]!r}")
+        log.warning("Response ends mid-word — appending '.' to ...%r", text[-20:])
         text += "."
     return text
 
@@ -390,22 +393,23 @@ def _handle_analysis_toggle(text: str) -> str:
     off_keywords = ("off", "disable", "stop", "deactivate")
 
     try:
-        # main is imported lazily to avoid a circular import at module load.
-        from main import _proactive_analyst
-        if _proactive_analyst is None:
+        # Use the module-level registry instead of `from main import …`.
+        # The registry pattern is robust to Python's __main__ vs main
+        # dual-import quirk that previously caused brain.py to see None.
+        from core.proactive_analyst import get_instance as _get_analyst
+        analyst = _get_analyst()
+        if analyst is None:
             return "The analyst module isn't running, Chan."
 
         if any(kw in text_lower for kw in on_keywords):
-            _proactive_analyst.enable()
+            analyst.enable()
         elif any(kw in text_lower for kw in off_keywords):
-            _proactive_analyst.disable()
+            analyst.disable()
         else:
-            _proactive_analyst.toggle()
+            analyst.toggle()
 
-    except ImportError:
-        return "I couldn't reach the analyst module, Chan."
     except Exception as e:
-        print(f"[Brain] Analysis toggle error: {e}")
+        log.error("Analysis toggle error: %s", e)
 
     return ""  # Analyst speaks its own confirmation
 
@@ -433,7 +437,7 @@ def _handle_web_query(text: str, intent: str = "") -> str:
     """
     # ── Local fallback mode (offline / quota conservation) ───────────
     if USE_LOCAL_FALLBACK:
-        print("[Brain] USE_LOCAL_FALLBACK is True — routing to Ollama.")
+        log.info("USE_LOCAL_FALLBACK is True — routing to Ollama.")
         return _handle_ollama_fallback(text)
 
     # ── Scrape web context ───────────────────────────────────────────
@@ -441,7 +445,7 @@ def _handle_web_query(text: str, intent: str = "") -> str:
     try:
         web_context = search_web(text)
     except Exception as e:
-        print(f"[Brain] Web scrape failed ({e}) — continuing without web context.")
+        log.warning("Web scrape failed (%s) — continuing without web context.", e)
 
     # ── Primary: Gemini Flash (web + screenshot) ─────────────────────
     try:
@@ -454,14 +458,14 @@ def _handle_web_query(text: str, intent: str = "") -> str:
             web_context=web_context,
             include_screen=True,
         )
-        print(f"[Brain] Gemini Tier 2 response — {len(raw)} chars.")
+        log.info("Gemini Tier 2 response — %d chars.", len(raw))
         mood, clean_response = _parse_mood_tag(raw)
         clean_response = _ensure_complete_sentence(clean_response)
         _trigger_avatar_mood(mood)
         return clean_response
 
     except Exception as e:
-        print(f"[Brain] Gemini failed ({e}) — falling back to Ollama.")
+        log.warning("Gemini failed (%s) — falling back to Ollama.", e)
 
     # ── Fallback: Ollama local model ─────────────────────────────────
     return _handle_ollama_fallback(text, web_context=web_context)
@@ -488,13 +492,13 @@ def _handle_vision(text: str) -> str:
         Aria's response string, ready for TTS.
     """
     if USE_LOCAL_FALLBACK:
-        print("[Brain] USE_LOCAL_FALLBACK is True — vision unavailable offline.")
+        log.info("USE_LOCAL_FALLBACK is True — vision unavailable offline.")
         return (
             "I can't see your screen right now, Chan — "
             "I'm running in offline mode without Gemini."
         )
 
-    print("[Brain] Tier 2 vision — querying Gemini Flash.")
+    log.info("Tier 2 vision — querying Gemini Flash.")
     analyzer = _get_vision_analyzer()
     raw = analyzer.analyse_screen(context=text)
     mood, clean_response = _parse_mood_tag(raw)
@@ -565,7 +569,7 @@ def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
         try:
             web_context = search_web(text)
         except Exception as e:
-            print(f"[Brain] Web scrape failed in Ollama fallback ({e}).")
+            log.warning("Web scrape failed in Ollama fallback (%s).", e)
 
     prompt = (
         "You are Aria, a helpful and concise personal AI assistant. "
@@ -582,13 +586,13 @@ def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
 
     try:
         raw = _query_ollama(prompt)
-        print(f"[Brain] Ollama fallback response — {len(raw)} chars.")
+        log.info("Ollama fallback response — %d chars.", len(raw))
         mood, clean_response = _parse_mood_tag(raw)
         clean_response = _ensure_complete_sentence(clean_response)
         _trigger_avatar_mood(mood)
         return clean_response
     except Exception as e:
-        print(f"[Brain] Ollama fallback failed ({e}) — escalating to Claude.")
+        log.warning("Ollama fallback failed (%s) — escalating to Claude.", e)
         return _handle_claude(text)
 
 
@@ -653,9 +657,9 @@ def _handle_claude(user_input: str) -> str:
 
             for block in assistant_content:
                 if block.type == "tool_use":
-                    print(f"[Brain] Using tool: {block.name}")
+                    log.info("Using tool: %s", block.name)
                     result = _execute_tool(block.name, block.input)
-                    print(f"[Brain] Tool result: {result}")
+                    log.info("Tool result: %s", result)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -691,7 +695,7 @@ def _handle_claude(user_input: str) -> str:
     except anthropic.RateLimitError:
         return "I've been rate-limited by the API. Give me a moment and try again."
     except Exception as e:
-        print(f"[Brain] Claude API error: {e}")
+        log.error("Claude API error: %s", e)
         return "Something went wrong reaching the API. Check the console for details."
 
 

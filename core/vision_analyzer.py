@@ -31,6 +31,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from core.logger import get_logger
+
+log = get_logger(__name__)
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 LATEST_SCREENSHOT = Path("data/captures/latest.png")
 
@@ -115,14 +119,14 @@ class VisionAnalyzer:
 
         age = self._get_screenshot_age_seconds()
         if age is not None and age > STALE_THRESHOLD:
-            print(f"[Vision] WARNING: latest.png is {age:.0f}s old — may be stale.")
+            log.warning("latest.png is %.0fs old — may be stale.", age)
 
         prompt = self._build_prompt(context)
 
         try:
             reply = self._query_gemini(prompt, screenshot)
         except Exception as e:
-            print(f"[Vision] ERROR querying Gemini: {e}")
+            log.error("querying Gemini: %s", e)
             return (
                 "[SAD] Something went wrong when I tried to look at your "
                 "screen. I'll try again in a moment."
@@ -178,9 +182,9 @@ class VisionAnalyzer:
                 age = self._get_screenshot_age_seconds()
                 if age is not None and age < 60:
                     content_parts.append(screenshot)
-                    print(f"[Vision] Including screenshot ({age:.0f}s old) in Gemini request.")
+                    log.info("Including screenshot (%.0fs old) in Gemini request.", age)
                 else:
-                    print(f"[Vision] Screenshot too old ({age:.0f}s) — skipping from request.")
+                    log.warning("Screenshot too old (%.0fs) — skipping from request.", age)
 
         # Build the unified prompt
         prompt_parts = [
@@ -211,7 +215,7 @@ class VisionAnalyzer:
             )
             result = getattr(response, "text", "") or ""
             result = result.strip()
-            print(f"[Vision] Gemini unified response — {len(result)} chars.")
+            log.info("Gemini unified response — %d chars.", len(result))
             return result
         except Exception as e:
             raise RuntimeError(f"Gemini reasoning failed: {e}")
@@ -226,26 +230,26 @@ class VisionAnalyzer:
         try:
             import config
         except Exception as e:
-            print(f"[Vision] Could not import config: {e}")
+            log.error("Could not import config: %s", e)
             return
 
         api_key = getattr(config, "GEMINI_API_KEY", None)
         if not api_key or api_key.startswith("your-"):
-            print("[Vision] GEMINI_API_KEY not set — vision disabled.")
+            log.warning("GEMINI_API_KEY not set — vision disabled.")
             return
 
         try:
             from google import genai
         except ImportError:
-            print("[Vision] google-genai not installed — vision disabled.")
+            log.warning("google-genai not installed — vision disabled.")
             return
 
         try:
             self._client = genai.Client(api_key=api_key)
             self.available = True
-            print(f"[Vision] Gemini {GEMINI_MODEL} ready (google.genai SDK).")
+            log.info("Gemini %s ready (google.genai SDK).", GEMINI_MODEL)
         except Exception as e:
-            print(f"[Vision] Failed to initialise Gemini: {e}")
+            log.error("Failed to initialise Gemini: %s", e)
 
     def _load_screenshot(self):
         """Load `data/captures/latest.png` as a PIL Image.
@@ -261,7 +265,7 @@ class VisionAnalyzer:
             unreadable / partial.
         """
         if not LATEST_SCREENSHOT.exists():
-            print(f"[Vision] No screenshot at {LATEST_SCREENSHOT}")
+            log.warning("No screenshot at %s", LATEST_SCREENSHOT)
             return None
 
         try:
@@ -274,14 +278,14 @@ class VisionAnalyzer:
             # Sanity check — anything under 1 KB is almost certainly a
             # partial write that slipped past the atomic rename.
             if len(buf) < 1024:
-                print(f"[Vision] Screenshot too small ({len(buf)} bytes) — likely partial write. Skipping.")
+                log.warning("Screenshot too small (%d bytes) — likely partial write. Skipping.", len(buf))
                 return None
 
             img = Image.open(io.BytesIO(buf))
             img.load()  # Force decode now so any truncation surfaces here, not in Gemini
             return img
         except Exception as e:
-            print(f"[Vision] Failed to open screenshot: {e}")
+            log.error("Failed to open screenshot: %s", e)
             return None
 
     def _build_prompt(self, context: str) -> str:

@@ -21,6 +21,9 @@ from config import (
     MAX_RECORDING_DURATION,
     MIN_RECORDING_DURATION,
 )
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 # Calibrated silence threshold (set by calibrate_silence)
 _silence_threshold: float = SILENCE_THRESHOLD
@@ -74,7 +77,7 @@ def calibrate_silence(device_index: int = None, duration: float = 2.0) -> float:
 
     stream = audio.open(**stream_kwargs)
 
-    print("[Aria] Calibrating microphone — stay quiet for 2 seconds...")
+    log.info("Calibrating microphone — stay quiet for 2 seconds...")
     rms_values = []
     chunks_needed = int(duration * SAMPLE_RATE / CHUNK_SIZE)
 
@@ -90,7 +93,7 @@ def calibrate_silence(device_index: int = None, duration: float = 2.0) -> float:
 
     avg_rms = np.mean(rms_values)
     _silence_threshold = max(avg_rms * 1.5, 200)  # Floor of 200 to avoid ultra-sensitivity
-    print(f"[Aria] Ambient noise level: {avg_rms:.0f} RMS — threshold set to {_silence_threshold:.0f}")
+    log.info("Ambient noise level: %.0f RMS — threshold set to %.0f", avg_rms, _silence_threshold)
     return _silence_threshold
 
 
@@ -128,10 +131,10 @@ def preprocess_audio(audio_bytes: bytes) -> bytes:
             stationary=True,
             prop_decrease=0.75,
         )
-        print("[Aria] Noise reduction applied.")
+        log.debug("Noise reduction applied.")
         return reduced.astype(np.int16).tobytes()
     except Exception as e:
-        print(f"[Aria] WARNING: Noise reduction failed ({e}), using raw audio.")
+        log.warning("Noise reduction failed (%s), using raw audio.", e)
         return audio_bytes
 
 
@@ -152,7 +155,7 @@ def record_audio(device_index: int = None) -> bytes:
     try:
         audio = pyaudio.PyAudio()
     except Exception as e:
-        print(f"[Aria] Failed to initialise PyAudio: {e}")
+        log.error("Failed to initialise PyAudio: %s", e)
         return b""
 
     stream_kwargs = {
@@ -168,11 +171,11 @@ def record_audio(device_index: int = None) -> bytes:
     try:
         stream = audio.open(**stream_kwargs)
     except Exception as e:
-        print(f"[Aria] Failed to open audio stream: {e}")
+        log.error("Failed to open audio stream: %s", e)
         audio.terminate()
         return b""
 
-    print("[Aria] Listening... speak now.")
+    log.info("Listening... speak now.")
 
     frames = []
     silent_chunks = 0
@@ -186,7 +189,7 @@ def record_audio(device_index: int = None) -> bytes:
             elapsed = time.time() - start_time
 
             if elapsed > MAX_RECORDING_DURATION:
-                print(f"[Aria] Max recording duration ({MAX_RECORDING_DURATION}s) reached.")
+                log.info("Max recording duration (%ds) reached.", MAX_RECORDING_DURATION)
                 break
 
             if is_silent(data):
@@ -194,7 +197,7 @@ def record_audio(device_index: int = None) -> bytes:
                 if has_speech:
                     frames.append(data)
                 if has_speech and silent_chunks >= chunks_for_silence:
-                    print("[Aria] Silence detected — stopping recording.")
+                    log.info("Silence detected — stopping recording.")
                     break
             else:
                 silent_chunks = 0
@@ -202,7 +205,7 @@ def record_audio(device_index: int = None) -> bytes:
                 frames.append(data)
 
         if not has_speech:
-            print("[Aria] No speech detected.")
+            log.debug("No speech detected.")
             return b""
 
     finally:
@@ -212,10 +215,10 @@ def record_audio(device_index: int = None) -> bytes:
 
     raw_audio = b"".join(frames)
     duration = len(raw_audio) / (SAMPLE_RATE * 2)  # 2 bytes per sample (int16)
-    print(f"[Aria] Captured {duration:.1f}s of audio.")
+    log.info("Captured %.1fs of audio.", duration)
 
     if duration < MIN_RECORDING_DURATION:
-        print(f"[Aria] Too short ({duration:.1f}s < {MIN_RECORDING_DURATION}s) — ignoring.")
+        log.debug("Too short (%.1fs < %ds) — ignoring.", duration, MIN_RECORDING_DURATION)
         return b""
 
     # Apply noise reduction before returning

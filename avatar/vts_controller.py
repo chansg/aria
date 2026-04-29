@@ -41,6 +41,10 @@ from typing import Optional
 
 import pyvts
 
+from core.logger import get_logger
+
+log = get_logger(__name__)
+
 # ── Token storage ─────────────────────────────────────────────────────────────
 TOKEN_FILE       = "data/vts_token.txt"
 PLUGIN_NAME      = "Aria"
@@ -120,7 +124,7 @@ class VTSController:
             name="VTSEventLoop",
         )
         self._thread.start()
-        print("[VTS] Controller started — connecting to VTube Studio...")
+        log.info("Controller started — connecting to VTube Studio...")
 
     def stop(self) -> None:
         """Gracefully close the VTS connection and stop the event loop."""
@@ -137,7 +141,7 @@ class VTSController:
             state: One of 'idle', 'listening', 'thinking', 'speaking', 'dormant'.
         """
         if state not in self.state_hotkeys:
-            print(f"[VTS] Unknown state '{state}' — not in state_hotkeys map.")
+            log.warning("Unknown state %r — not in state_hotkeys map.", state)
             return
 
         hotkey = self.state_hotkeys[state]
@@ -156,7 +160,7 @@ class VTSController:
         """
         key = mood.upper()
         if key not in self.mood_hotkeys:
-            print(f"[VTS] Unknown mood '{mood}' — not in mood_hotkeys map.")
+            log.warning("Unknown mood %r — not in mood_hotkeys map.", mood)
             return
 
         hotkey = self.mood_hotkeys[key]
@@ -212,25 +216,25 @@ class VTSController:
             )
 
             await self._vts.connect()
-            print("[VTS] WebSocket connected.")
+            log.info("WebSocket connected.")
 
             await self._vts.request_authenticate_token()
             await self._vts.request_authenticate()
             self.connected = True
-            print("[VTS] Authenticated. Aria is connected to VTube Studio.")
+            log.info("Authenticated. Aria is connected to VTube Studio.")
 
             # Run queue consumer — one hotkey at a time, no concurrent recv
             await self._queue_consumer()
 
         except ConnectionRefusedError:
-            print(
-                "[VTS] ERROR: Could not connect to VTube Studio.\n"
-                "       Make sure VTube Studio is running and the API is enabled on port 8001.\n"
-                "       Aria will continue without avatar."
+            log.error(
+                "Could not connect to VTube Studio. "
+                "Make sure VTube Studio is running and the API is enabled on port 8001. "
+                "Aria will continue without avatar."
             )
             self.connected = False
         except Exception as e:
-            print(f"[VTS] ERROR: Connection failed — {e}")
+            log.error("Connection failed — %s", e)
             self.connected = False
 
     async def _queue_consumer(self) -> None:
@@ -245,7 +249,7 @@ class VTSController:
             try:
                 await self._trigger_hotkey(hotkey_name)
             except Exception as e:
-                print(f"[VTS] ERROR triggering hotkey '{hotkey_name}': {e}")
+                log.error("triggering hotkey %r: %s", hotkey_name, e)
             finally:
                 self._queue.task_done()
 
@@ -254,7 +258,7 @@ class VTSController:
         if self._vts:
             await self._vts.close()
             self.connected = False
-            print("[VTS] Disconnected.")
+            log.info("Disconnected.")
 
     async def _trigger_hotkey(self, hotkey_name: str) -> None:
         """Trigger a named hotkey in VTube Studio.
@@ -278,6 +282,6 @@ class VTSController:
             await self._vts.request(
                 self._vts.vts_request.requestTriggerHotKey(hotkey_id)
             )
-            print(f"[VTS] Triggered hotkey: {hotkey_name}")
+            log.info("Triggered hotkey: %s", hotkey_name)
         else:
-            print(f"[VTS] Hotkey '{hotkey_name}' not found in model.")
+            log.warning("Hotkey %r not found in model.", hotkey_name)

@@ -21,16 +21,6 @@ Usage:
 import sys
 import threading
 
-# When Aria is launched via `python main.py`, this script is registered in
-# sys.modules as '__main__' only. core.brain._handle_analysis_toggle does
-# `from main import _proactive_analyst`, which would otherwise force Python
-# to re-import main.py as a SECOND, separate `main` module — with all the
-# top-level state freshly re-initialised (so `_proactive_analyst = None`).
-# Aliasing __main__ → 'main' here means both names resolve to the same
-# module object, so brain.py sees the live analyst instance.
-if __name__ == "__main__":
-    sys.modules.setdefault("main", sys.modules[__name__])
-
 from voice.listener import record_audio, get_audio_devices, calibrate_silence
 from voice.transcriber import load_model, transcribe_audio
 from voice.wake import listen_for_wake_word
@@ -48,7 +38,12 @@ from avatar.renderer import (
 )
 from voice.trainer import run_calibration, get_profile_summary
 from core.screen_capture import ScreenCapture
-from core.proactive_analyst import ProactiveAnalyst
+from core.proactive_analyst import ProactiveAnalyst, register as register_analyst
+from core.logger import get_logger
+
+log        = get_logger(__name__)        # [Aria]
+chan_log   = get_logger("Chan")          # [Chan]   — user speech transcript
+capture_log = get_logger("core.screen_capture")  # [Capture] — for capture-init messages
 
 # Name variants Whisper might produce (case-insensitive matching)
 # Expanded for large-v2 + British accent phonetic variants
@@ -82,11 +77,11 @@ def toggle_conversation_mode() -> bool:
     """
     if _conversation_mode.is_set():
         _conversation_mode.clear()
-        print("[Aria] Conversation mode OFF — entering sleep.")
+        log.info("Conversation mode OFF — entering sleep.")
         set_dormant()
     else:
         _conversation_mode.set()
-        print("[Aria] Conversation mode ON.")
+        log.info("Conversation mode ON.")
         set_idle()
     return _conversation_mode.is_set()
 
@@ -125,11 +120,11 @@ def toggle_free_conversation() -> bool:
     """
     if _free_conversation.is_set():
         _free_conversation.clear()
-        print("[Aria] Conversation mode: OFF — name required.")
+        log.info("Conversation mode: OFF — name required.")
         speak("Conversation mode off. Say my name to get my attention.")
     else:
         _free_conversation.set()
-        print("[Aria] Conversation mode: ON — listening freely.")
+        log.info("Conversation mode: ON — listening freely.")
         speak("Conversation mode on. I'm listening.")
     return _free_conversation.is_set()
 
@@ -194,7 +189,7 @@ def select_audio_device() -> int | None:
     """
     devices = get_audio_devices()
     if not devices:
-        print("[Aria] ERROR: No audio input devices found!")
+        log.error("No audio input devices found!")
         sys.exit(1)
 
     print("Available microphones:")
@@ -205,7 +200,7 @@ def select_audio_device() -> int | None:
 
     choice = input("Select device (number or 'd' for default): ").strip().lower()
     if choice == "d" or choice == "":
-        print("[Aria] Using system default microphone.")
+        log.info("Using system default microphone.")
         return None
 
     try:
@@ -213,13 +208,13 @@ def select_audio_device() -> int | None:
         valid_indices = [d["index"] for d in devices]
         if index in valid_indices:
             selected = next(d for d in devices if d["index"] == index)
-            print(f"[Aria] Using: {selected['name']}")
+            log.info("Using: %s", selected['name'])
             return index
         else:
-            print(f"[Aria] Invalid device index. Using system default.")
+            log.warning("Invalid device index. Using system default.")
             return None
     except ValueError:
-        print("[Aria] Invalid input. Using system default.")
+        log.warning("Invalid input. Using system default.")
         return None
 
 
@@ -261,9 +256,9 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
     print()
 
     # Verbal startup greeting
-    print("[Aria] All systems online.")
+    log.info("All systems online.")
     speak("Hello Chan. I'm online and ready.")
-    print("[Aria] Say my name to get my attention, or press Ctrl+C to quit.")
+    log.info("Say my name to get my attention, or press Ctrl+C to quit.")
     print()
 
     set_idle()
@@ -311,21 +306,21 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         set_idle()
                         continue
 
-                    print(f"\n[Chan] {text}")
+                    chan_log.info("%s", text)
 
                     # Check for exit commands
                     if any(cmd in text_lower for cmd in (
                         "quit", "exit", "goodbye", "shut down", "shutdown",
                     )):
-                        print("\n[Aria] Goodbye, Chan. Talk soon.")
+                        log.info("Goodbye, Chan. Talk soon.")
                         speak("Goodbye, Chan. Talk soon.")
                         break
 
                     # Think and respond
                     set_thinking()
-                    print("[Aria] Thinking...")
+                    log.info("Thinking...")
                     response = think(text)
-                    print(f"\n[Aria] {response}\n")
+                    log.info("%s", response)
 
                     # Speak (avatar state handled inside speak())
                     speak(response)
@@ -347,7 +342,7 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
 
                     # Briefly wake up for one question
                     set_listening()
-                    print("[Aria] I'm listening...")
+                    log.info("I'm listening...")
                     audio_data = record_audio(device_index=device_index)
 
                     if not audio_data:
@@ -358,17 +353,17 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                     text = transcribe_audio(audio_data)
 
                     if text:
-                        print(f"\n[Chan] {text}")
-                        print("[Aria] Thinking...")
+                        chan_log.info("%s", text)
+                        log.info("Thinking...")
                         response = think(text)
-                        print(f"\n[Aria] {response}\n")
+                        log.info("%s", response)
                         speak(response)
 
                     # Return to sleep after answering
                     set_dormant()
 
             except KeyboardInterrupt:
-                print("\n[Aria] Interrupted. Goodbye, Chan.")
+                log.info("Interrupted. Goodbye, Chan.")
                 break
     finally:
         shutdown_scheduler()
@@ -385,7 +380,7 @@ def run_aria():
     The avatar connects to VTube Studio in a background thread.
     The voice pipeline runs in a daemon background thread.
     """
-    print("[Aria] Initialising systems...")
+    log.info("Initialising systems...")
     print()
 
     # Initialise core systems
@@ -404,16 +399,16 @@ def run_aria():
             )
             _screen_capture.start()
         else:
-            print("[Capture] Screen capture disabled — set SCREEN_CAPTURE_ENABLED = True in config.py to enable.")
+            capture_log.info("Screen capture disabled — set SCREEN_CAPTURE_ENABLED = True in config.py to enable.")
     except Exception as e:
-        print(f"[Capture] ERROR: Could not start screen capture — {e}")
+        capture_log.error("Could not start screen capture — %s", e)
     print()
 
     # Log conversation mode status
     if is_free_conversation():
-        print("[Aria] Conversation mode: ON — responding to all speech.")
+        log.info("Conversation mode: ON — responding to all speech.")
     else:
-        print("[Aria] Conversation mode: OFF — name required.")
+        log.info("Conversation mode: OFF — name required.")
     print()
 
     # Select microphone (must happen before threading)
@@ -444,14 +439,17 @@ def run_aria():
             trigger_mood_fn=_analyst_trigger_mood,
         )
         _proactive_analyst.start()
+        # Register with the module-level singleton so core.brain can reach
+        # the live instance via core.proactive_analyst.get_instance().
+        register_analyst(_proactive_analyst)
         # Definitive confirmation — if this line appears, the analyst object
         # exists, the daemon thread is running, and brain.py can reach it.
-        print("[Analyst] Startup confirmed.")
+        analyst_log = get_logger("core.proactive_analyst")
+        analyst_log.info("Startup confirmed.")
     except Exception as e:
         # Loud and unambiguous so the line cannot be lost in startup noise.
-        print(f"[Analyst] FAILED to start: {e}")
-        import traceback
-        traceback.print_exc()
+        analyst_log = get_logger("core.proactive_analyst")
+        analyst_log.error("FAILED to start: %s", e, exc_info=True)
         _proactive_analyst = None
     print()
 
@@ -466,7 +464,7 @@ def run_aria():
     # Block main thread until exit (VTS handles its own window)
     avatar.run()
 
-    print("[Aria] Shutdown complete.")
+    log.info("Shutdown complete.")
 
 
 def main():

@@ -46,6 +46,9 @@ assets/sounds/aria_response.wav
 # Claude Code local settings
 .claude/
 
+# Session logs — never commit
+logs/
+
 # OS
 .DS_Store
 Thumbs.db

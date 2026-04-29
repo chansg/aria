@@ -26,6 +26,9 @@ from config import (
     CHANNELS,
     CHUNK_SIZE,
 )
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 # Wake word variants to match (case-insensitive)
 WAKE_PHRASES = {"aria", "arya", "hey aria", "hey arya", "a]ria"}
@@ -57,7 +60,7 @@ def listen_for_wake_word(
     try:
         audio = pyaudio.PyAudio()
     except Exception as e:
-        print(f"[Aria] Failed to initialise PyAudio for wake word: {e}")
+        log.error("Failed to initialise PyAudio for wake word: %s", e)
         return False
 
     stream_kwargs = {
@@ -73,7 +76,7 @@ def listen_for_wake_word(
     try:
         stream = audio.open(**stream_kwargs)
     except Exception as e:
-        print(f"[Aria] Failed to open audio stream for wake word: {e}")
+        log.error("Failed to open audio stream for wake word: %s", e)
         audio.terminate()
         return False
 
@@ -129,7 +132,7 @@ def listen_for_wake_word(
             text_lower = text_lower.rstrip(".,!?")
 
             if _contains_wake_word(text_lower):
-                print(f"[Aria] Wake word detected: \"{text}\"")
+                log.info("Wake word detected: %r", text)
                 return True
 
     finally:

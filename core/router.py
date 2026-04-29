@@ -21,6 +21,9 @@ To add a new intent:
 from __future__ import annotations
 from datetime import datetime
 from core.scheduler import list_reminders
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 # ── Intent map ───────────────────────────────────────────────────────────────
@@ -138,7 +141,7 @@ def classify(text: str) -> dict:
     for intent_name, config in INTENT_MAP.items():
         if config["tier"] == 1:
             if _matches(text_lower, config["keywords"]):
-                print(f"[Router] Tier 1 matched: {intent_name} — handling locally.")
+                log.info("Tier 1 matched: %s — handling locally.", intent_name)
                 return {"intent": intent_name, "tier": 1}
 
     # Then Tier 2
@@ -146,11 +149,11 @@ def classify(text: str) -> dict:
         if config["tier"] == 2:
             if _matches(text_lower, config["keywords"]):
                 backend = "Gemini Flash (vision)" if intent_name == "vision" else "Gemini Flash (web + screen)"
-                print(f"[Router] Tier 2 matched: {intent_name} — {backend}.")
+                log.info("Tier 2 matched: %s — %s.", intent_name, backend)
                 return {"intent": intent_name, "tier": 2}
 
     # No match — escalate to Claude
-    print("[Router] No match — Tier 3 escalation to Claude API.")
+    log.info("No match — Tier 3 escalation to Claude API.")
     return {"intent": "claude", "tier": 3}
 
 
@@ -198,5 +201,5 @@ def handle_calendar() -> str:
     try:
         return list_reminders()
     except Exception as e:
-        print(f"[Router] Calendar lookup error: {e}")
+        log.error("Calendar lookup error: %s", e)
         return "I couldn't check your schedule right now, Chan."

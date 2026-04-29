@@ -14,6 +14,9 @@ import json
 import os
 from datetime import datetime
 from config import MEMORY_DB_PATH
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 _conn: sqlite3.Connection = None
@@ -50,7 +53,7 @@ def init_memory() -> None:
     """)
 
     _conn.commit()
-    print("[Aria] Memory system initialised.")
+    log.info("Memory system initialised.")
 
     # Seed default semantic memories if table is empty
     cursor = _conn.execute("SELECT COUNT(*) FROM semantic")
@@ -68,7 +71,7 @@ def _seed_semantic_memories() -> None:
     ]
     for category, key, value in defaults:
         store_semantic(category, key, value)
-    print("[Aria] Seeded default memories about Chan.")
+    log.info("Seeded default memories about Chan.")
 
 
 def store_episodic(role: str, content: str, summary: str = None) -> None:
