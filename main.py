@@ -31,15 +31,16 @@ from core.scheduler import init_scheduler, shutdown_scheduler
 from voice.speaker import speak
 from avatar.renderer import (
     create_avatar,
-    set_idle,
-    set_listening,
-    set_thinking,
-    set_dormant,
+    set_idle      as _renderer_set_idle,
+    set_listening as _renderer_set_listening,
+    set_thinking  as _renderer_set_thinking,
+    set_dormant   as _renderer_set_dormant,
 )
 from voice.trainer import run_calibration, get_profile_summary
 from core.screen_capture import ScreenCapture
 from core.proactive_analyst import ProactiveAnalyst, register as register_analyst
-from core.logger import get_logger
+from core.logger import get_logger, attach_ui
+from core.terminal_ui import AriaUI, RICH_AVAILABLE
 
 log        = get_logger(__name__)        # [Aria]
 chan_log   = get_logger("Chan")          # [Chan]   — user speech transcript
@@ -121,10 +122,14 @@ def toggle_free_conversation() -> bool:
     if _free_conversation.is_set():
         _free_conversation.clear()
         log.info("Conversation mode: OFF — name required.")
+        if _ui is not None:
+            _ui.set_conv_mode(False)
         speak("Conversation mode off. Say my name to get my attention.")
     else:
         _free_conversation.set()
         log.info("Conversation mode: ON — listening freely.")
+        if _ui is not None:
+            _ui.set_conv_mode(True)
         speak("Conversation mode on. I'm listening.")
     return _free_conversation.is_set()
 
@@ -137,16 +142,57 @@ _screen_capture: ScreenCapture | None = None
 # from a voice command. Stays None if Gemini isn't configured.
 _proactive_analyst: ProactiveAnalyst | None = None
 
+# ── Module-level UI instance (rich terminal dashboard) ───────────
+# Stays None when rich is unavailable or the interactive setup is
+# still running. Subsystems push state updates through helper
+# wrappers below; the activity log is fed automatically by the
+# UILogHandler attached via core.logger.attach_ui().
+_ui: AriaUI | None = None
+
+
+def _set_ui_state(state: str) -> None:
+    """Push an avatar state name into the dashboard if the UI is up."""
+    if _ui is not None:
+        _ui.set_state(state.upper())
+
+
+# ── State setter wrappers ─────────────────────────────────────────────────────
+# Voice pipeline calls these instead of avatar.renderer.set_X directly so each
+# state change drives BOTH the VTS avatar AND the rich dashboard's Status panel
+# from a single call site. Existing voice_pipeline code is unmodified.
+
+def set_idle() -> None:
+    _renderer_set_idle()
+    _set_ui_state("IDLE")
+
+
+def set_listening() -> None:
+    _renderer_set_listening()
+    _set_ui_state("LISTENING")
+
+
+def set_thinking() -> None:
+    _renderer_set_thinking()
+    _set_ui_state("THINKING")
+
+
+def set_dormant() -> None:
+    _renderer_set_dormant()
+    _set_ui_state("DORMANT")
+
 
 def _analyst_set_state(state: str) -> None:
     """Forward a state-name string to the avatar renderer's setter.
 
     Used by ProactiveAnalyst — keeps the analyst module decoupled from
-    the renderer's state-specific function names.
+    the renderer's state-specific function names. Also mirrors the
+    state into the rich dashboard so the Status panel updates in step
+    with the avatar.
 
     Args:
         state: One of 'idle', 'listening', 'thinking', 'speaking', 'dormant'.
     """
+    # The set_X wrappers below already mirror to the UI, so no extra push needed.
     if state == "idle":
         set_idle()
     elif state == "thinking":
@@ -322,6 +368,10 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                     response = think(text)
                     log.info("%s", response)
 
+                    # Mirror to UI's Last Response panel before speaking
+                    if _ui is not None and response:
+                        _ui.set_last_response(response)
+
                     # Speak (avatar state handled inside speak())
                     speak(response)
                     set_idle()
@@ -357,6 +407,8 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         log.info("Thinking...")
                         response = think(text)
                         log.info("%s", response)
+                        if _ui is not None and response:
+                            _ui.set_last_response(response)
                         speak(response)
 
                     # Return to sleep after answering
@@ -371,6 +423,8 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
             _screen_capture.stop()
         if _proactive_analyst:
             _proactive_analyst.stop()
+        if _ui is not None:
+            _ui.stop()
         avatar.close()
 
 
@@ -453,6 +507,23 @@ def run_aria():
         _proactive_analyst = None
     print()
 
+    # Initialise the rich terminal dashboard (Prompt 3 — Phase 17).
+    # The UI mirrors logger output into an activity panel, exposes Aria's
+    # current state + last response, and polls VTS / analyst status. If
+    # rich isn't installed we fall back to the previous avatar.run() which
+    # blocks the main thread on a quiet sleep loop. set_conv_mode is
+    # seeded so the panel matches the actual flag at startup.
+    global _ui
+    if RICH_AVAILABLE:
+        _ui = AriaUI()
+        _ui.set_conv_mode(is_free_conversation())
+        attach_ui(_ui)
+        log.info("Rich terminal dashboard ready — press Ctrl+C to quit.")
+    else:
+        log.warning("rich not installed — running with plain terminal output.")
+        _ui = None
+    print()
+
     # Launch voice pipeline in a background thread
     pipeline_thread = threading.Thread(
         target=voice_pipeline,
@@ -461,8 +532,13 @@ def run_aria():
     )
     pipeline_thread.start()
 
-    # Block main thread until exit (VTS handles its own window)
-    avatar.run()
+    # Block the main thread on the dashboard until Ctrl+C. With no UI we
+    # fall back to avatar.run() which keeps the VTS connection alive on
+    # a sleep loop until interrupted — same behaviour as before this PR.
+    if _ui is not None:
+        _ui.run()
+    else:
+        avatar.run()
 
     log.info("Shutdown complete.")
 

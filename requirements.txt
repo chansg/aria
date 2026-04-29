@@ -52,3 +52,7 @@ google-genai>=1.0.0
 # Web scraping (Phase 4 — live data access)
 playwright>=1.40.0
 beautifulsoup4>=4.12.0
+
+# Terminal UI (rich live dashboard — PowerShell 7 / Windows Terminal)
+# Optional — main.py falls back to plain console output if missing.
+rich>=13.0.0
