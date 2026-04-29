@@ -17,6 +17,9 @@ import sounddevice as sd
 from piper.voice import PiperVoice
 import re
 from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 # Output WAV path (reused each utterance — overwritten, not accumulated)
@@ -43,9 +46,9 @@ def _load_voice() -> PiperVoice:
                 "Download the hfc_female medium ONNX from HuggingFace "
                 "(rhasspy/piper-voices) into assets/voices/."
             )
-        print(f"[Aria] Loading voice model: {PIPER_MODEL_PATH}")
+        log.info("Loading voice model: %s", PIPER_MODEL_PATH)
         _voice = PiperVoice.load(PIPER_MODEL_PATH)
-        print(f"[Aria] Voice model loaded ({_voice.config.sample_rate}Hz).")
+        log.info("Voice model loaded (%dHz).", _voice.config.sample_rate)
     return _voice
 
 
@@ -147,8 +150,7 @@ def speak(text: str) -> None:
     text = _clean_for_speech(text)
     chunks = _split_into_sentences(text)
 
-    print(f"[Speaker] Speaking {len(chunks)} chunk(s), "
-          f"{len(text)} total chars.")
+    log.info("Speaking %d chunk(s), %d total chars.", len(chunks), len(text))
 
     # Update avatar state (imported here to avoid circular imports)
     try:
@@ -161,12 +163,12 @@ def speak(text: str) -> None:
         try:
             _speak_sync(chunk)
         except FileNotFoundError as e:
-            print(f"[Speaker] ERROR on chunk {i+1}/{len(chunks)}: {e}")
-            print(f"[Speaker] (text): {chunk}")
+            log.error("on chunk %d/%d: %s", i + 1, len(chunks), e)
+            log.error("(text): %s", chunk)
             break
         except Exception as e:
-            print(f"[Speaker] ERROR on chunk {i+1}/{len(chunks)}: {e}")
-            print(f"[Speaker] (text): {chunk}")
+            log.error("on chunk %d/%d: %s", i + 1, len(chunks), e)
+            log.error("(text): %s", chunk)
 
     try:
         from avatar.renderer import set_idle, set_amplitude

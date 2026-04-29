@@ -19,6 +19,9 @@ from difflib import SequenceMatcher
 from config import DATA_DIR
 from voice.listener import record_audio, calibrate_silence
 from voice.transcriber import load_model, transcribe_audio
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 VOICE_PROFILE_PATH = os.path.join(DATA_DIR, "voice_profile.json")
 
@@ -220,7 +223,7 @@ def run_calibration(device_index: int = None) -> dict:
     profile["phrase_results"] = results
 
     _save_profile(profile)
-    print("[Aria] Voice profile saved.")
+    log.info("Voice profile saved.")
 
     return profile
 
@@ -270,7 +273,7 @@ def record_correction(misheard: str, correct: str) -> None:
     profile["whisper_hints"] = list(set(frequent))
 
     _save_profile(profile)
-    print(f"[Aria] Correction recorded: \"{misheard}\" → \"{correct}\"")
+    log.info("Correction recorded: %r -> %r", misheard, correct)
 
 
 def apply_corrections(text: str) -> str:

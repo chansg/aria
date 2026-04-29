@@ -20,6 +20,9 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 from config import DATA_DIR
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 CACHE_FILE = os.path.join(DATA_DIR, "web_cache.json")
 CACHE_TTL_MINUTES = 30          # Bumped from 15 — covers weather caching too
@@ -107,10 +110,10 @@ def clean_query(raw: str) -> str:
     for wrong, correct in _MISHEAR_CORRECTIONS.items():
         if wrong in text:
             text = text.replace(wrong, correct)
-            print(f"[WebSearch] Mishear corrected: '{wrong}' -> '{correct}'")
+            log.info("Mishear corrected: %r -> %r", wrong, correct)
 
     result = text.strip().rstrip("?.,!")
-    print(f"[WebSearch] Cleaned query: '{raw[:50]}' -> '{result}'")
+    log.info("Cleaned query: %r -> %r", raw[:50], result)
     return result
 
 
@@ -162,11 +165,11 @@ def _fetch_wttr(location: str) -> str:
             f"low {tomorrow_min}°C."
         )
 
-        print(f"[WebSearch] wttr.in fetch successful for: {location}")
+        log.info("wttr.in fetch successful for: %s", location)
         return summary
 
     except Exception as e:
-        print(f"[WebSearch] wttr.in fetch failed ({e}) — falling back to DuckDuckGo.")
+        log.warning("wttr.in fetch failed (%s) — falling back to DuckDuckGo.", e)
         return ""
 
 
@@ -226,7 +229,7 @@ def search_web(query: str) -> str:
 
     # Return cached result if still valid
     if cache_key in cache and _is_cache_valid(cache[cache_key]):
-        print(f"[WebSearch] Returning cached result for: {query[:50]}")
+        log.info("Returning cached result for: %s", query[:50])
         return cache[cache_key]["result"]
 
     # Weather queries → wttr.in for structured data
@@ -238,15 +241,15 @@ def search_web(query: str) -> str:
 
     # Fall back to DuckDuckGo if wttr.in failed or query is non-weather
     if not result:
-        print(f"[WebSearch] Scraping DuckDuckGo for: {query[:50]}...")
+        log.info("Scraping DuckDuckGo for: %s...", query[:50])
         try:
             result = _scrape_ddg_playwright(query)
         except Exception as e:
-            print(f"[WebSearch] Playwright failed ({e}), falling back to httpx...")
+            log.warning("Playwright failed (%s), falling back to httpx...", e)
             try:
                 result = _scrape_ddg_httpx(query)
             except Exception as e2:
-                print(f"[WebSearch] httpx fallback also failed: {e2}")
+                log.error("httpx fallback also failed: %s", e2)
                 return "Sorry Chan, I couldn't find results for that query right now."
 
     if not result or not result.strip():

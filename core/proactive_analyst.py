@@ -31,10 +31,45 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.logger import get_logger
+
+log = get_logger(__name__)
+spoken_log = get_logger("Aria")  # for [Aria] confirmation lines
+
 LATEST_SCREENSHOT  = Path("data/captures/latest.png")
 ANALYSIS_INTERVAL  = 60          # Seconds between analysis cycles
 COOLDOWN_MINUTES   = 5           # Minimum minutes between proactive comments
 MAX_SCREENSHOT_AGE = 90          # Seconds — skip if latest.png is too stale
+
+# ── Module-level registry ─────────────────────────────────────────────────────
+# main.py calls register(analyst) once on startup. Other modules
+# (e.g. core.brain._handle_analysis_toggle) reach the live instance via
+# get_instance() — replaces the fragile `from main import _proactive_analyst`
+# pattern, which forced Python to re-import main.py as a separate module
+# under a different name, returning None instead of the real instance.
+_instance: "ProactiveAnalyst | None" = None
+
+
+def register(analyst: "ProactiveAnalyst") -> None:
+    """Register the global ProactiveAnalyst instance.
+
+    Called by main.py after initialisation. Replaces the fragile
+    `from main import _proactive_analyst` pattern.
+
+    Args:
+        analyst: The live ProactiveAnalyst instance.
+    """
+    global _instance
+    _instance = analyst
+
+
+def get_instance() -> "ProactiveAnalyst | None":
+    """Return the registered ProactiveAnalyst instance.
+
+    Returns:
+        The live instance, or None if not yet initialised.
+    """
+    return _instance
 
 # Use the same Gemini model as vision_analyzer.py for consistency.
 # Override via config.GEMINI_MODEL if needed.
@@ -126,16 +161,16 @@ class ProactiveAnalyst:
 
             api_key = getattr(config, "GEMINI_API_KEY", "") or ""
             if not api_key or api_key.startswith("your-"):
-                print("[Analyst] WARNING: GEMINI_API_KEY not set — proactive analysis disabled.")
+                log.warning("GEMINI_API_KEY not set — proactive analysis disabled.")
                 return
 
             self._client     = genai.Client(api_key=api_key)
             self._model_name = getattr(config, "GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
-            print(f"[Analyst] Gemini ready — model: {self._model_name}")
+            log.info("Gemini ready — model: %s", self._model_name)
         except ImportError:
-            print("[Analyst] WARNING: google-genai not installed — proactive analysis disabled.")
+            log.warning("google-genai not installed — proactive analysis disabled.")
         except Exception as e:
-            print(f"[Analyst] ERROR: Could not initialise Gemini — {e}")
+            log.error("Could not initialise Gemini — %s", e)
 
     # ── Public control ────────────────────────────────────────────────────────
 
@@ -153,16 +188,16 @@ class ProactiveAnalyst:
             name="ProactiveAnalystThread",
         )
         self._thread.start()
-        print(
-            f"[Analyst] Proactive analyst started — "
-            f"{ANALYSIS_INTERVAL}s cycle, {COOLDOWN_MINUTES}min cooldown. "
-            f"Analysis mode: OFF (say 'Aria, analysis mode on' to enable)."
+        log.info(
+            "Proactive analyst started — %ds cycle, %dmin cooldown. "
+            "Analysis mode: OFF (say 'Aria, analysis mode on' to enable).",
+            ANALYSIS_INTERVAL, COOLDOWN_MINUTES,
         )
 
     def stop(self) -> None:
         """Stop the analyst thread gracefully."""
         self.running = False
-        print("[Analyst] Proactive analyst stopped.")
+        log.info("Proactive analyst stopped.")
 
     def enable(self) -> None:
         """Enable analysis mode — Aria will speak proactive insights.
@@ -174,9 +209,9 @@ class ProactiveAnalyst:
         """
         with self._lock:
             self.enabled = True
-        print("[Analyst] Analysis mode: ON")
+        log.info("Analysis mode: ON")
         confirmation = "Analysis mode on, Chan. I'll let you know if I spot anything worth flagging."
-        print(f"[Aria] {confirmation}")
+        spoken_log.info(confirmation)
         self._speak(confirmation)
 
     def disable(self) -> None:
@@ -186,9 +221,9 @@ class ProactiveAnalyst:
         """
         with self._lock:
             self.enabled = False
-        print("[Analyst] Analysis mode: OFF")
+        log.info("Analysis mode: OFF")
         confirmation = "Analysis mode off, Chan. I'll stay quiet unless you ask me something."
-        print(f"[Aria] {confirmation}")
+        spoken_log.info(confirmation)
         self._speak(confirmation)
 
     def toggle(self) -> bool:
@@ -221,17 +256,17 @@ class ProactiveAnalyst:
 
                 if self._on_cooldown():
                     remaining = self._cooldown_remaining()
-                    print(f"[Analyst] On cooldown — {remaining:.0f}s remaining.")
+                    log.debug("On cooldown — %.0fs remaining.", remaining)
                     continue
 
                 if not self._screenshot_fresh():
-                    print("[Analyst] Screenshot too stale — skipping cycle.")
+                    log.warning("Screenshot too stale — skipping cycle.")
                     continue
 
                 self._analyse()
 
             except Exception as e:
-                print(f"[Analyst] ERROR in analysis loop: {e}")
+                log.error("in analysis loop: %s", e)
                 # Never crash the thread
 
     def _analyse(self) -> None:
@@ -239,7 +274,7 @@ class ProactiveAnalyst:
         if self._client is None:
             return
 
-        print("[Analyst] Running analysis cycle...")
+        log.info("Running analysis cycle...")
 
         try:
             # Signal avatar is thinking
@@ -248,7 +283,7 @@ class ProactiveAnalyst:
             # Read latest.png as raw bytes (defensive: catch partial writes)
             image_bytes = LATEST_SCREENSHOT.read_bytes()
             if len(image_bytes) < 1024:
-                print(f"[Analyst] Screenshot too small ({len(image_bytes)} bytes) — likely partial write, skipping.")
+                log.warning("Screenshot too small (%d bytes) — likely partial write, skipping.", len(image_bytes))
                 self._set_state("idle")
                 return
 
@@ -264,27 +299,27 @@ class ProactiveAnalyst:
 
             result = (getattr(response, "text", "") or "").strip()
             if not result:
-                print("[Analyst] Empty Gemini response — treating as IDLE.")
+                log.info("Empty Gemini response — treating as IDLE.")
                 self._set_state("idle")
                 return
 
-            print(f"[Analyst] Gemini response: {result[:80]!r}")
+            log.info("Gemini response: %r", result[:80])
 
             # IDLE — stay silent (handle bare 'IDLE' or 'IDLE.' or 'IDLE\n' etc.)
             if result.upper().startswith("IDLE"):
-                print("[Analyst] IDLE — no insight to share.")
+                log.info("IDLE — no insight to share.")
                 self._set_state("idle")
                 return
 
             # Non-IDLE — speak the insight
-            print(f"[Analyst] Insight detected — speaking ({len(result)} chars).")
+            log.info("Insight detected — speaking (%d chars).", len(result))
             self.last_comment_time = datetime.now()
             self._trigger_mood("THINKING")
             self._speak(result)
             self._set_state("idle")
 
         except Exception as e:
-            print(f"[Analyst] ERROR during analysis: {e}")
+            log.error("during analysis: %s", e)
             self._set_state("idle")
 
     # ── Helpers ───────────────────────────────────────────────────────────────

@@ -27,6 +27,9 @@ if sys.platform == "win32":
 
 from faster_whisper import WhisperModel
 from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, SAMPLE_RATE, TRANSCRIPTION_TIMEOUT
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 # Biases Whisper transcription toward Aria's expected vocabulary.
 # Include the name variants and common command words Chan uses.
@@ -51,13 +54,13 @@ def load_model() -> WhisperModel:
     """
     global _model
     if _model is None:
-        print(f"[Aria] Loading Whisper model '{WHISPER_MODEL_SIZE}' on {WHISPER_DEVICE}...")
+        log.info("Loading Whisper model %r on %s...", WHISPER_MODEL_SIZE, WHISPER_DEVICE)
         _model = WhisperModel(
             WHISPER_MODEL_SIZE,
             device=WHISPER_DEVICE,
             compute_type=WHISPER_COMPUTE_TYPE,
         )
-        print("[Aria] Whisper model loaded successfully.")
+        log.info("Whisper model loaded successfully.")
     return _model
 
 
@@ -78,7 +81,7 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     # Convert raw bytes to float32 numpy array (what faster-whisper expects)
     audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
-    print("[Aria] Transcribing...")
+    log.info("Transcribing...")
 
     # Run transcription with a timeout to prevent hangs
     result_holder = [None, None]
@@ -97,14 +100,14 @@ def transcribe_audio(audio_bytes: bytes) -> str:
                 initial_prompt=WHISPER_INITIAL_PROMPT,
             )
         except Exception as e:
-            print(f"[Aria] Whisper error: {e}")
+            log.error("Whisper error: %s", e)
 
     t = threading.Thread(target=_run_transcribe, daemon=True)
     t.start()
     t.join(timeout=TRANSCRIPTION_TIMEOUT)
 
     if t.is_alive():
-        print(f"[Aria] Transcription timed out after {TRANSCRIPTION_TIMEOUT}s.")
+        log.warning("Transcription timed out after %ds.", TRANSCRIPTION_TIMEOUT)
         return ""
 
     segments, info = result_holder
@@ -120,14 +123,14 @@ def transcribe_audio(audio_bytes: bytes) -> str:
             from voice.trainer import apply_corrections
             corrected = apply_corrections(full_text)
             if corrected != full_text.lower().strip():
-                print(f"[Aria] Transcription: \"{full_text}\" → \"{corrected}\"")
+                log.info("Transcription: %r -> %r", full_text, corrected)
                 full_text = corrected
             else:
-                print(f"[Aria] Transcription: \"{full_text}\"")
+                log.info("Transcription: %r", full_text)
         except ImportError:
             print(f"[Aria] Transcription: \"{full_text}\"")
     else:
-        print("[Aria] No speech detected in audio.")
+        log.debug("No speech detected in audio.")
 
     return full_text
 

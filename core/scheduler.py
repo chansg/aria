@@ -13,6 +13,10 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from config import CALENDAR_DB_PATH
+from core.logger import get_logger
+
+log = get_logger(__name__)
+spoken_log = get_logger("Aria")  # for reminder announcements
 
 # Module-level scheduler instance
 _scheduler: BackgroundScheduler = None
@@ -46,7 +50,7 @@ def init_scheduler(announce_fn=None) -> BackgroundScheduler:
     _init_events_table()
 
     job_count = len(_scheduler.get_jobs())
-    print(f"[Aria] Scheduler online — {job_count} pending reminder(s).")
+    log.info("Scheduler online — %d pending reminder(s).", job_count)
     return _scheduler
 
 
@@ -189,7 +193,7 @@ def _fire_reminder(title: str, description: str = "") -> None:
     if description:
         message += f" {description}"
 
-    print(f"\n[Aria] {message}")
+    spoken_log.info(message)
 
     if _announce_callback:
         _announce_callback(message)
@@ -201,4 +205,4 @@ def shutdown_scheduler() -> None:
     if _scheduler:
         _scheduler.shutdown(wait=False)
         _scheduler = None
-        print("[Aria] Scheduler shut down.")
+        log.info("Scheduler shut down.")

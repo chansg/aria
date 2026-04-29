@@ -14,6 +14,9 @@ main.py requires minimal changes:
 """
 
 from avatar.vts_controller import VTSController
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 _controller: VTSController = None
 
@@ -104,13 +107,13 @@ class AvatarHandle:
         the main thread alive while the voice pipeline runs in the
         background thread.
         """
-        print("[Avatar] VTube Studio mode active. Press Ctrl+C to quit.")
+        log.info("VTube Studio mode active. Press Ctrl+C to quit.")
         try:
             while True:
                 import time
                 time.sleep(1)
         except KeyboardInterrupt:
-            print("\n[Aria] Shutting down...")
+            log.info("Shutting down...")
 
     def close(self) -> None:
         """Stop the VTS controller and close the connection."""

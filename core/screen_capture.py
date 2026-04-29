@@ -30,6 +30,10 @@ import mss
 import mss.tools
 from PIL import Image
 
+from core.logger import get_logger
+
+log = get_logger(__name__)
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 CAPTURE_DIR      = Path("data/captures")
 LATEST_PATH      = CAPTURE_DIR / "latest.png"
@@ -77,7 +81,7 @@ class ScreenCapture:
         if one is already running.
         """
         if self.running:
-            print("[Capture] Already running.")
+            log.info("Already running.")
             return
 
         self.running = True
@@ -87,12 +91,12 @@ class ScreenCapture:
             name="ScreenCaptureThread",
         )
         self._thread.start()
-        print(f"[Capture] Screen capture started — every {self.interval}s → {CAPTURE_DIR}/")
+        log.info("Screen capture started — every %ss -> %s/", self.interval, CAPTURE_DIR)
 
     def stop(self) -> None:
         """Stop the capture thread gracefully."""
         self.running = False
-        print("[Capture] Screen capture stopped.")
+        log.info("Screen capture stopped.")
 
     def get_latest_path(self) -> Path | None:
         """Return the path to the most recent screenshot.
@@ -120,7 +124,7 @@ class ScreenCapture:
                     time.sleep(self.interval)
 
                 except Exception as e:
-                    print(f"[Capture] ERROR during capture: {e}")
+                    log.error("during capture: %s", e)
                     time.sleep(self.interval)
 
     def _take_screenshot(self, sct: mss.mss, monitor: dict) -> None:
@@ -159,7 +163,7 @@ class ScreenCapture:
         os.replace(latest_tmp, LATEST_PATH)  # atomic on Windows + Unix
 
         size_kb = filename.stat().st_size / 1024
-        print(f"[Capture] Frame {self.frame_count} saved → {filename.name} ({size_kb:.0f} KB)")
+        log.debug("Frame %d saved -> %s (%.0f KB)", self.frame_count, filename.name, size_kb)
 
         # Prune rolling buffer
         self._prune_buffer()
@@ -197,4 +201,4 @@ class ScreenCapture:
         while len(frames) > BUFFER_SIZE:
             oldest = frames.pop(0)
             oldest.unlink()
-            print(f"[Capture] Buffer pruned — deleted {oldest.name}")
+            log.debug("Buffer pruned — deleted %s", oldest.name)

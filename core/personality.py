@@ -10,6 +10,9 @@ import json
 import os
 from datetime import datetime
 from config import PERSONALITY_PATH
+from core.logger import get_logger
+
+log = get_logger(__name__)
 
 
 _personality: dict = None
@@ -28,11 +31,11 @@ def load_personality() -> dict:
     if os.path.exists(PERSONALITY_PATH):
         with open(PERSONALITY_PATH, "r", encoding="utf-8") as f:
             _personality = json.load(f)
-        print("[Aria] Personality loaded.")
+        log.info("Personality loaded.")
     else:
         _personality = _default_personality()
         save_personality()
-        print("[Aria] Default personality created.")
+        log.info("Default personality created.")
 
     return _personality
 

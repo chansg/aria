@@ -13,6 +13,10 @@ import struct
 import math
 import tempfile
 import numpy as np
+
+from core.logger import get_logger
+
+log = get_logger(__name__)
 import sounddevice as sd
 
 # Chime parameters
@@ -101,7 +105,7 @@ def play_chime() -> None:
 
     if _chime_path is None or not os.path.exists(_chime_path):
         _chime_path = _generate_chime_wav()
-        print(f"[Aria] Wake chime generated: {_chime_path}")
+        log.info("Wake chime generated: %s", _chime_path)
 
     # Read WAV and play via sounddevice
     with wave.open(_chime_path, "rb") as wf:
