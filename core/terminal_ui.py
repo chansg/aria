@@ -55,6 +55,7 @@ MODULE_COLOURS = {
     "VTS":         "medium_purple",
     "Router":      "cyan",
     "Analyst":     "gold1",
+    "Market":      "spring_green2",
     "Speaker":     "green",
     "Vision":      "cornflower_blue",
     "WebSearch":   "orange1",
