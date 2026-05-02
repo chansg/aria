@@ -73,3 +73,14 @@ CONVERSATION_MODE_DEFAULT = True
 # Download from HuggingFace: rhasspy/piper-voices → en/en_US/hfc_female/medium/
 # Save to: assets/voices/en_US-hfc_female-medium.onnx (and .onnx.json)
 PIPER_MODEL_PATH = "assets/voices/en_US-hfc_female-medium.onnx"
+
+# ── Market Analyst (Phase 18) ───────────────────────────────────────────────
+# Daily stock snapshot triggered by "Aria, market update".
+# Tickers fetched via yfinance — no API key required.
+# Add or remove tickers freely; the spoken summary scales to whatever is here.
+MARKET_TICKERS = ["AAPL", "MSFT", "NVDA", "TSLA"]
+# Volume must exceed 30-day average by this percentage to be flagged as a spike.
+MARKET_VOLUME_SPIKE_PCT = 30.0
+# Today's daily change in absolute % must exceed this many σ of the
+# 30-day return distribution to be flagged as a "large move".
+MARKET_VOLATILITY_SIGMA = 2.0

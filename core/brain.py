@@ -348,6 +348,8 @@ def think(user_input: str) -> str:
             response = handle_calendar()
         elif intent == "analysis_mode":
             response = _handle_analysis_toggle(user_input)
+        elif intent == "market":
+            response = _handle_market_query(user_input)
         else:
             response = handle_time()  # fallback
 
@@ -412,6 +414,39 @@ def _handle_analysis_toggle(text: str) -> str:
         log.error("Analysis toggle error: %s", e)
 
     return ""  # Analyst speaks its own confirmation
+
+
+def _handle_market_query(text: str) -> str:
+    """Handle a market data query — fetch snapshot, save, return spoken summary.
+
+    Constructs a fresh MarketAnalyst per call (no shared state needed for
+    on-demand fetches in this MVP). Selects short vs full mode based on
+    whether the user said 'full' / 'detailed' / 'details' anywhere in the
+    query.
+
+    Never raises — yfinance failures are caught inside fetch_snapshot()
+    and surfaced via the snapshot's `errors` dict (which the spoken
+    summary flags). A hard top-level exception only fires on programmer
+    error (e.g. import failure) — graceful fallback message in that case.
+
+    Args:
+        text: The user's original query.
+
+    Returns:
+        Plain-text spoken summary suitable for Aria's TTS.
+    """
+    log.info("Market query — fetching snapshot")
+    try:
+        from core.market_analyst import MarketAnalyst
+        analyst = MarketAnalyst()
+        snapshot = analyst.fetch_snapshot()
+        analyst.save_snapshot(snapshot)
+        text_lower = text.lower()
+        full_mode  = any(kw in text_lower for kw in ("full", "detailed", "details"))
+        return analyst.spoken_summary(snapshot, short=not full_mode)
+    except Exception as e:
+        log.error("Market query failed: %s", e)
+        return "Sorry Chan, I couldn't fetch the market data right now."
 
 
 # ── Tier 2 handler ────────────────────────────────────────────────────────────

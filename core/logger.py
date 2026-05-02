@@ -43,6 +43,7 @@ _PREFIX_MAP = {
     "core.vision_analyzer":   "Vision",
     "core.screen_capture":    "Capture",
     "core.proactive_analyst": "Analyst",
+    "core.market_analyst":    "Market",
     "core.memory":            "Memory",
     "core.personality":       "Personality",
     "core.scheduler":         "Scheduler",

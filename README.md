@@ -109,6 +109,7 @@ aria/
 │   ├── screen_capture.py          # mss desktop capture, rolling buffer
 │   ├── vision_analyzer.py         # Gemini vision — analyse_screen(), reason_with_context()
 │   ├── web_search.py              # DuckDuckGo scraper, query cleaning, cache
+│   ├── market_analyst.py          # yfinance daily snapshots + spoken summary
 │   └── usage_tracker.py           # Claude API call logging
 │
 ├── voice/
@@ -258,9 +259,12 @@ On first run:
 | 14 | Kokoro-82M TTS | ⏸ Deferred — Python 3.13 incompatibility |
 | 15 | Stage 3a — Proactive Analyst Loop | ✅ Complete |
 | 16 | Stage 3b — Notification state + queued insights | 🔄 Planned |
-| 17 | Stage 3c — Finance specialisation | 🔄 Planned |
-| 18 | Memory upgrade — FAISS semantic search | 🔄 Planned |
-| 19 | Voice recognition training | 🔄 Planned |
+| 17 | Structured logging — `logs/aria.log` with rotation | ✅ Complete |
+| 18 | Rich terminal dashboard — colour-coded live UI | ✅ Complete |
+| 19 | Market analyst MVP — daily snapshots + spoken summary | 🟡 PR #67 |
+| 20 | Stage 3c — Finance specialisation (sentiment, news, filings) | 🔄 Planned |
+| 21 | Memory upgrade — FAISS semantic search | 🔄 Planned |
+| 22 | Voice recognition training | 🔄 Planned |
 
 ---
 

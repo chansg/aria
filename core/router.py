@@ -64,6 +64,19 @@ INTENT_MAP: dict[str, dict] = {
             "analysis mode",     "toggle analysis",
         ],
     },
+    "market": {
+        "tier": 1,
+        "keywords": [
+            # Direct asks
+            "market update",   "market summary",   "market today",
+            "stock update",    "stocks today",     "ticker update",
+            # Conversational
+            "how's the market",  "how is the market",  "how are the markets",
+            "what's the market", "what are the markets", "give me the market",
+            # Full-mode trigger (handler reads "full" / "details" from text)
+            "full market update", "detailed market", "market details",
+        ],
+    },
 
     # Tier 2 — web + Ollama, free
     "weather": {
