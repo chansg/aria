@@ -24,31 +24,21 @@ OLLAMA_MODEL = "mistral"
 # --- Conversation / Prompt Limits ---
 MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
 MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
-TRANSCRIPTION_TIMEOUT = 15    # Seconds before aborting a Whisper transcription
+TRANSCRIPTION_TIMEOUT = 45    # Seconds before giving up on a Whisper transcription
 
-# ── VTube Studio — Hiyori_A Model Configuration ───────────────────────────────
-# Hotkey names must match exactly what is configured in VTube Studio.
-# These have been manually created and confirmed in VTS for the Hiyori_A model.
+# --- Whisper Speech-to-Text ---
+# Windows CPU fallback: use "small" for responsiveness or "medium" for accuracy.
+# CUDA path: use WHISPER_DEVICE="cuda", WHISPER_COMPUTE_TYPE="float16", and a
+# larger model only after the NVIDIA/cuBLAS runtime is confirmed healthy.
+WHISPER_MODEL_SIZE = "small"
+WHISPER_DEVICE = "cpu"
+WHISPER_COMPUTE_TYPE = "int8"
 
-VTS_STATE_HOTKEYS = {
-    "idle":      None,           # Base state — no hotkey, Hiyori rests naturally
-    "listening": "hiyori_m05",   # Active listening expression
-    "thinking":  "hiyori_m03",   # Pensive, looking to the side
-    "speaking":  "hiyori_m01",   # Engaged/cheerful while talking
-    "dormant":   None,           # Sleeping — no hotkey configured yet
-}
-
-VTS_MOOD_HOTKEYS = {
-    "HAPPY":     "hiyori_m01",   # Bright cheerful smile
-    "NEUTRAL":   None,           # Base state — no hotkey fired
-    "THINKING":  "hiyori_m03",   # Pensive expression
-    "SURPRISED": "hiyori_m02",   # Wide eyes, open mouth
-    "SAD":       "hiyori_m04",   # Downcast, saddened
-}
-
-# VTube Studio API
-VTS_PORT    = 8001
-VTS_ENABLED = True   # Set to False to run without VTube Studio
+# ── Visual Placeholder ───────────────────────────────────────────────────────
+# The visual layer is currently a local no-op facade. It keeps Aria's state
+# and mood hooks intact while the project focuses on core reasoning, voice,
+# market analysis, memory, and validation.
+VISUAL_PLACEHOLDER_ENABLED = True
 
 # ── Screen Capture ────────────────────────────────────────────────────────────
 # Stage 1: Desktop screenshot capture for gameplay analysis pipeline
@@ -69,8 +59,31 @@ SCREEN_CAPTURE_INTERVAL = 5.0     # Seconds between screenshots
 # False = Aria only responds when her name is spoken first
 CONVERSATION_MODE_DEFAULT = True
 
-# --- TTS Voice Model ---
-# Download from HuggingFace: rhasspy/piper-voices → en/en_US/hfc_female/medium/
+# --- TTS Voice Provider ---
+# Kokoro is Aria's target voice. CUDA should use an NVIDIA GPU when
+# onnxruntime-gpu[cuda,cudnn] is installed. Piper is optional, not a silent fallback.
+TTS_PROVIDER = "kokoro"       # "kokoro" | "kokoro-onnx" | "piper"
+TTS_CONVERSATION_PROVIDER = "kokoro"
+TTS_FALLBACK_PROVIDER = ""
+TTS_FAIL_LOUD = True
+
+# Kokoro ONNX assets:
+#   https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0
+# Use the full model for CUDA. The int8 model is better suited to CPU fallback.
+KOKORO_ONNX_MODEL_PATH = "assets/voices/kokoro/kokoro-v1.0.onnx"
+KOKORO_ONNX_VOICES_PATH = "assets/voices/kokoro/voices-v1.0.bin"
+KOKORO_ONNX_PROVIDER = "CUDAExecutionProvider"
+KOKORO_DISABLE_PROVIDER_FALLBACK = True
+KOKORO_VOICE = "af_heart"
+KOKORO_LANG = "en-us"
+KOKORO_SPEED = 1.0
+
+# Stage 3b should surface proactive insights as notifications. Keep spontaneous
+# speech off for now so analyst output cannot interrupt live conversation.
+PROACTIVE_ANALYST_SPEAK_INSIGHTS = False
+
+# Piper fallback voice:
+# Download from HuggingFace: rhasspy/piper-voices -> en/en_US/hfc_female/medium/
 # Save to: assets/voices/en_US-hfc_female-medium.onnx (and .onnx.json)
 PIPER_MODEL_PATH = "assets/voices/en_US-hfc_female-medium.onnx"
 

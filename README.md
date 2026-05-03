@@ -1,59 +1,39 @@
-# Aria — Autonomous AI Desktop Assistant
+# Aria - Autonomous AI Desktop Assistant
 
-A multi-modal AI desktop assistant built in Python on Windows 11. Aria listens for voice input, routes queries through a three-tier reasoning system, analyses the desktop via screen capture, and responds through a Live2D avatar with reactive facial expressions.
+Aria is a multi-modal AI desktop assistant built in Python for Windows 11. It listens for voice input, routes queries through a tiered reasoning system, analyses desktop screenshots when enabled, tracks local memory, and speaks responses through a configurable local TTS provider.
+
+The visual model layer has been removed for now. `avatar/renderer.py` is a lightweight placeholder facade that records state and mood cues without depending on an external renderer. This keeps the core pipeline stable while finance, memory, logging, tests, and validation mature.
 
 ---
 
 ## Architecture
 
-```
+```text
 Microphone input
-      │
-      ▼
-faster-whisper (large-v2, CUDA)     ← Speech-to-text, VAD filtering, noise reduction
-      │
-      ▼
-core/router.py                      ← Intent classification — Tier 1 / 2 / 3
-      │
-      ├── Tier 1 (local)            ← time, date, calendar — zero network, zero cost
-      │         │
-      │         ▼
-      │   Python stdlib
-      │
-      ├── Tier 2 (web + vision)     ← weather, web queries, screen analysis
-      │         │
-      │         ▼
-      │   DuckDuckGo scrape (Playwright)
-      │         +
-      │   data/captures/latest.png  ← updated every 5s by screen capture module
-      │         │
-      │         ▼
-      │   Gemini 1.5 Flash          ← unified multimodal reasoning (web + screen)
-      │         │
-      │   [fallback] Ollama/Mistral ← offline path (USE_LOCAL_FALLBACK = True)
-      │
-      └── Tier 3 (reasoning)        ← personality, memory, complex queries
-                │
-                ▼
-          Anthropic Claude API
-                +
-          SQLite memory (episodic + semantic)
-                +
-          personality.json (evolving traits)
-      │
-      ▼
-core/brain.py                       ← response + mood tag parser
-      │
-      ├── [HAPPY/SAD/THINKING/SURPRISED/NEUTRAL] tag → avatar/vts_controller.py
-      │
-      ▼
-voice/speaker.py                    ← Piper TTS (hfc_female medium, 24050Hz)
-      │
-      ▼
-VB-Audio Virtual Cable              ← routes TTS audio to VTube Studio for lip sync
-      │
-      ▼
-VTube Studio (Hiyori_A model)       ← Live2D avatar, WebSocket API port 8001
+      |
+      v
+voice/listener.py                    # PyAudio capture, silence detection, noise reduction
+      |
+      v
+voice/transcriber.py                 # faster-whisper, CUDA, VAD filtering
+      |
+      v
+core/router.py                       # Intent classification: Tier 1 / 2 / 3
+      |
+      +--> Tier 1                    # Local handlers: time, date, reminders, market update
+      |
+      +--> Tier 2                    # Web + screen context through Gemini, with Ollama fallback
+      |
+      +--> Tier 3                    # Claude API with personality, memory, and scheduler tools
+      |
+      v
+core/brain.py                        # Dispatch, mood-tag parsing, memory persistence
+      |
+      v
+voice/speaker.py                     # TTS facade, sentence splitting, markdown stripping
+      |
+      v
+avatar/renderer.py                   # Local visual placeholder facade
 ```
 
 ---
@@ -62,171 +42,201 @@ VTube Studio (Hiyori_A model)       ← Live2D avatar, WebSocket API port 8001
 
 | Tier | Engine | Query types | Cost |
 |------|--------|-------------|------|
-| 1 | Python stdlib | Time, date, reminders, calendar | Free |
-| 2 | Gemini 1.5 Flash + DuckDuckGo | Weather, web search, screen analysis | Gemini API |
-| 2 fallback | Ollama — Mistral 7B | Offline Tier 2 when `USE_LOCAL_FALLBACK = True` | Free |
-| 3 | Anthropic Claude API | Personality, memory, reasoning | Claude API |
+| 1 | Python stdlib / local modules | Time, date, reminders, market snapshots | Free |
+| 2 | Gemini Flash + DuckDuckGo + screenshot context | Weather, web search, screen analysis | Gemini API |
+| 2 fallback | Ollama / Mistral | Offline Tier 2 when `USE_LOCAL_FALLBACK = True` | Free |
+| 3 | Anthropic Claude API | Personality, memory, complex reasoning | Claude API |
 
 ---
 
 ## Tech Stack
 
 | Component | Technology | Notes |
-|-----------|-----------|-------|
-| Speech-to-text | faster-whisper `large-v2` | CUDA on RTX 3080, VAD + noisereduce |
-| Wake word | Picovoice Porcupine | Always-on, low power |
-| Voice output | Piper TTS `hfc_female medium` | British female, 24050Hz ONNX |
-| Lip sync | VB-Audio Virtual Cable | Routes Piper output to VTube Studio |
-| Avatar | VTube Studio — Hiyori_A | Live2D, WebSocket API via `pyvts` |
-| Tier 2 reasoning | Google Gemini 1.5 Flash | Multimodal — web text + screenshot |
-| Tier 2 fallback | Ollama — Mistral 7B | Local offline reasoning |
-| Tier 3 reasoning | Anthropic Claude API | claude-sonnet-4 |
-| Memory | SQLite — episodic + semantic | `core/memory.py` |
-| Personality | JSON state file | `data/personality.json` — evolves over time |
+|-----------|------------|-------|
+| Speech-to-text | faster-whisper | CPU `small` default, CUDA-ready when NVIDIA runtime is healthy |
+| Wake word | Whisper keyword spotting | Local, no extra wake-word API |
+| Voice output | Kokoro ONNX | CUDA provider, fail-loud, no silent Piper fallback |
+| Visual layer | Local placeholder facade | No external renderer dependency |
+| Tier 2 reasoning | Google Gemini Flash | Web text + optional screenshot |
+| Tier 2 fallback | Ollama / Mistral | Local offline reasoning |
+| Tier 3 reasoning | Anthropic Claude API | Complex responses and tool use |
+| Market analysis | yfinance + pandas | Daily OHLCV snapshots and anomaly summary |
+| Memory | SQLite | Episodic and semantic memory |
+| Personality | JSON | `data/personality.json` |
 | Scheduler | APScheduler | Reminders and timed events |
 | Web scraping | Playwright + BeautifulSoup | DuckDuckGo HTML endpoint |
-| Screen capture | mss | Full desktop, every 5s, 10-frame rolling buffer |
-| Vision analysis | Gemini 1.5 Flash | Reads `data/captures/latest.png` |
-| Intent routing | `core/router.py` | Keyword-based, tier-ordered classification |
+| Screen capture | mss | Full desktop capture with rolling buffer |
+| Terminal UI | rich | Live status and activity dashboard |
 
 ---
 
 ## Project Structure
 
-```
+```text
 aria/
-├── main.py                        # Entry point — threading, pipeline, avatar init
-├── config.py                      # Local secrets — never committed
-├── config.example.py              # Safe template — copy to config.py
+├── main.py
+├── config.py                      # Local secrets - never committed
+├── config.example.py
 ├── requirements.txt
 │
 ├── core/
-│   ├── brain.py                   # Tier dispatch, Gemini reasoning, Claude fallback
-│   ├── router.py                  # Intent classification — single source of truth
+│   ├── brain.py                   # Tier dispatch, Gemini/Claude/Ollama handlers
+│   ├── router.py                  # Intent classification
+│   ├── market_analyst.py          # yfinance snapshots + spoken summary
 │   ├── memory.py                  # SQLite episodic + semantic memory
-│   ├── personality.py             # System prompt builder, mood tracking
+│   ├── personality.py             # System prompt builder, interaction tracking
+│   ├── proactive_analyst.py       # Optional Gemini screenshot loop
 │   ├── scheduler.py               # APScheduler reminders
-│   ├── screen_capture.py          # mss desktop capture, rolling buffer
-│   ├── vision_analyzer.py         # Gemini vision — analyse_screen(), reason_with_context()
-│   ├── web_search.py              # DuckDuckGo scraper, query cleaning, cache
-│   ├── market_analyst.py          # yfinance daily snapshots + spoken summary
-│   └── usage_tracker.py           # Claude API call logging
+│   ├── screen_capture.py          # mss desktop capture
+│   ├── terminal_ui.py             # rich dashboard
+│   ├── vision_analyzer.py         # Gemini screenshot analysis
+│   └── web_search.py              # Web search and weather context
 │
 ├── voice/
-│   ├── listener.py                # Microphone capture, VAD, noise reduction
-│   ├── transcriber.py             # faster-whisper large-v2, ARIA_VARIANTS matching
-│   ├── speaker.py                 # Piper TTS, sentence splitting, markdown stripping
-│   └── trainer.py                 # Voice calibration — WER measurement
+│   ├── listener.py                # Microphone capture
+│   ├── transcriber.py             # faster-whisper
+│   ├── speaker.py                 # TTS facade and playback
+│   ├── tts/                       # Kokoro ONNX and Piper providers
+│   ├── trainer.py                 # Voice calibration
+│   ├── wake.py                    # Wake-word spotting
+│   └── chime.py                   # Wake chime
 │
 ├── avatar/
-│   ├── vts_controller.py          # pyvts WebSocket client, hotkey triggering
-│   ├── renderer.py                # Thin wrapper — create_avatar(), set_state()
-│   └── animations.py              # State + mood tag constants
+│   ├── renderer.py                # Local placeholder facade
+│   └── animations.py              # Shared state and mood constants
 │
-├── data/                          # Runtime data — never committed
-│   ├── memory.db                  # SQLite conversations + facts
-│   ├── calendar.db                # Scheduled reminders
-│   ├── personality.json           # Aria's current personality state
-│   ├── vts_token.json             # VTube Studio auth token
-│   ├── web_cache.json             # DuckDuckGo scrape cache (15min TTL)
-│   └── captures/                  # Screenshot buffer (latest.png + 10 frames)
+├── tests/
+│   └── test_market_analyst.py
 │
-├── assets/
-│   └── voices/                    # Piper ONNX model files (gitignored)
+├── docs/
+│   └── voice-runtime.md          # Kokoro CUDA baseline and troubleshooting
 │
+├── data/                          # Runtime data - never commit private files
+├── assets/                        # Local audio/model/sprite assets
 └── tools/
-    └── kokoro_voice_test.py       # TTS voice comparison utility
+    ├── benchmark_tts.py           # TTS provider latency benchmark
+    └── generate_sprites.py
 ```
-
----
-
-## VTube Studio — Hiyori_A Hotkey Mapping
-
-| Mood tag | Hotkey | Expression |
-|----------|--------|------------|
-| `HAPPY` | `hiyori_m01` | Bright cheerful smile |
-| `SURPRISED` | `hiyori_m02` | Wide eyes, open mouth |
-| `THINKING` | `hiyori_m03` | Pensive, looking to side |
-| `SAD` | `hiyori_m04` | Downcast expression |
-| `NEUTRAL` | `None` | Base state — no hotkey fired |
-| State: listening | `hiyori_m05` | Alert listening expression |
-
-Mood tags are prefixed to every LLM response (`[HAPPY] Here's the weather...`), parsed in `brain.py`, and sent to `vts_controller.py` before the text reaches TTS.
 
 ---
 
 ## Setup
 
 ### Prerequisites
+
 - Windows 11
 - Python 3.13
-- NVIDIA GPU (RTX recommended — used by Whisper large-v2)
-- VTube Studio (Steam) — Hiyori_A model loaded, API enabled on port 8001
-- VB-Audio Virtual Cable — routes Piper TTS output to VTube Studio
-- Ollama — `ollama pull mistral` (offline fallback)
-- espeak-ng 1.52.0 (system install — required for future TTS work)
+- NVIDIA GPU recommended for Kokoro CUDA and optional Whisper CUDA
+- Ollama with `mistral` pulled if you want the local Tier 2 fallback
+- Kokoro ONNX full model and voices file for the primary voice
+- Piper voice model is optional; it is not used as a silent fallback by default
 
 ### Installation
 
-```bash
+```powershell
 git clone https://github.com/chansg/aria.git
 cd aria
 
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
 pip install -r requirements.txt
-
 playwright install chromium
 ```
 
 ### Configuration
 
-```bash
-cp config.example.py config.py
-# Edit config.py — add API keys and configure settings
+```powershell
+Copy-Item config.example.py config.py
 ```
 
-Required keys in `config.py`:
+Required or commonly edited settings:
 
 ```python
-ANTHROPIC_API_KEY         = "..."
-GEMINI_API_KEY            = "..."
-PICOVOICE_API_KEY         = "..."   # wake word detection
-HF_TOKEN                  = "..."   # HuggingFace — speeds up Whisper downloads
+ANTHROPIC_API_KEY = "..."
+GEMINI_API_KEY = "..."
 
-SCREEN_CAPTURE_ENABLED    = True
-SCREEN_CAPTURE_INTERVAL   = 5.0
-USE_LOCAL_FALLBACK        = False   # True = route Tier 2 through Ollama
-CONVERSATION_MODE_DEFAULT = True    # True = Aria responds without name prefix
+SCREEN_CAPTURE_ENABLED = True
+SCREEN_CAPTURE_INTERVAL = 5.0
+USE_LOCAL_FALLBACK = False
+CONVERSATION_MODE_DEFAULT = True
 
-# VTube Studio hotkeys — must match exact names in VTS
-VTS_STATE_HOTKEYS = {
-    "idle":      None,
-    "listening": "hiyori_m05",
-    "thinking":  "hiyori_m03",
-    "dormant":   None,
-}
-VTS_MOOD_HOTKEYS = {
-    "HAPPY":     "hiyori_m01",
-    "NEUTRAL":   None,
-    "THINKING":  "hiyori_m03",
-    "SURPRISED": "hiyori_m02",
-    "SAD":       "hiyori_m04",
-}
+TTS_PROVIDER = "kokoro"
+TTS_CONVERSATION_PROVIDER = "kokoro"
+TTS_FALLBACK_PROVIDER = ""
+TTS_FAIL_LOUD = True
+
+KOKORO_ONNX_MODEL_PATH = "assets/voices/kokoro/kokoro-v1.0.onnx"
+KOKORO_ONNX_VOICES_PATH = "assets/voices/kokoro/voices-v1.0.bin"
+KOKORO_ONNX_PROVIDER = "CUDAExecutionProvider"
+KOKORO_DISABLE_PROVIDER_FALLBACK = True
+KOKORO_VOICE = "af_heart"
+KOKORO_LANG = "en-us"
+KOKORO_SPEED = 1.0
+
+PROACTIVE_ANALYST_SPEAK_INSIGHTS = False
+
+MARKET_TICKERS = ["AAPL", "MSFT", "NVDA", "TSLA"]
+MARKET_VOLUME_SPIKE_PCT = 30.0
+MARKET_VOLATILITY_SIGMA = 2.0
 ```
 
 ### Run
 
-```bash
+```powershell
 python main.py
 ```
 
 On first run:
-1. Select microphone from the numbered list
-2. Stay quiet for 2s while ambient noise is calibrated
-3. VTube Studio will show a connection popup — click **Allow**
-4. Auth token saved to `data/vts_token.json` for future sessions
+
+1. Select a microphone from the numbered list.
+2. Stay quiet while ambient noise is calibrated.
+3. Choose whether to run voice calibration.
+4. Use the rich terminal dashboard to monitor state, logs, and responses.
+
+---
+
+## Voice Runtime Baseline
+
+Aria's stable voice baseline is Kokoro ONNX on the NVIDIA CUDA execution provider.
+The full `kokoro-v1.0.onnx` model is used for GPU inference. The int8 model is
+kept only as a CPU-oriented asset because it is slower and less reliable on the
+RTX 4070 CUDA path.
+
+Conversation speech should log `provider=kokoro-onnx` and
+`CUDAExecutionProvider`. Piper is retained as an optional provider but is not a
+silent fallback in the default configuration. If Kokoro fails, Aria should fail
+loudly in `logs/aria.log` so the runtime issue is visible.
+
+Benchmark the current TTS path with:
+
+```powershell
+python tools\benchmark_tts.py --provider kokoro
+```
+
+Expected warm synthesis on the RTX 4070 is roughly half a second for short
+conversation replies after the model has loaded. See
+[`docs/voice-runtime.md`](docs/voice-runtime.md) for the full checklist and
+troubleshooting notes.
+
+---
+
+## Market Analyst
+
+The market analyst MVP adds a Tier 1 voice intent:
+
+```text
+Aria, market update
+Aria, full market update
+```
+
+It fetches recent OHLCV data with yfinance, computes moving averages, daily change, 30-day volatility, volume deviation, and crossover signals, then writes a structured snapshot to:
+
+```text
+data/market/YYYY-MM-DD.json
+```
+
+The spoken summary is intentionally short by default. Full mode gives one sentence per configured ticker.
 
 ---
 
@@ -234,8 +244,8 @@ On first run:
 
 | Mode | Behaviour | How to toggle |
 |------|-----------|---------------|
-| ON (default) | Aria responds to all speech | Say "Aria, conversation mode off" |
-| OFF | Aria only responds when name is spoken | Say "Aria, conversation mode on" |
+| ON | Aria responds to all speech | Say "Aria, conversation mode off" |
+| OFF | Aria only responds when addressed | Say "Aria, conversation mode on" |
 
 ---
 
@@ -243,28 +253,39 @@ On first run:
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| 1 | Voice pipeline — Whisper large-v2, VAD, noisereduce | ✅ |
-| 2 | Claude brain + SQLite memory | ✅ |
-| 3 | Piper TTS — hfc_female medium, sentence splitting | ✅ |
-| 4 | Web scraping — DuckDuckGo + Playwright | ✅ |
-| 5 | Avatar — VTube Studio Hiyori_A via pyvts | ✅ |
-| 6 | Speech accuracy — Whisper large-v2, VAD, initial prompt | ✅ |
-| 7 | Intent router — three-tier keyword classification | ✅ |
-| 8 | TTS fixes — markdown stripping, sentence chunking | ✅ |
-| 9 | Screen capture — mss, 5s interval, 10-frame buffer | ✅ |
-| 10 | Conversation mode toggle | ✅ |
-| 11 | Gemini vision Stage 2 — screen analysis on demand | ✅ |
-| 12 | VTube Studio hotkeys — Hiyori_A mood expressions | ✅ |
-| 13 | Gemini unified Tier 2 — web + screen multimodal | ✅ |
-| 14 | Kokoro-82M TTS | ⏸ Deferred — Python 3.13 incompatibility |
-| 15 | Stage 3a — Proactive Analyst Loop | ✅ Complete |
-| 16 | Stage 3b — Notification state + queued insights | 🔄 Planned |
-| 17 | Structured logging — `logs/aria.log` with rotation | ✅ Complete |
-| 18 | Rich terminal dashboard — colour-coded live UI | ✅ Complete |
-| 19 | Market analyst MVP — daily snapshots + spoken summary | 🟡 PR #67 |
-| 20 | Stage 3c — Finance specialisation (sentiment, news, filings) | 🔄 Planned |
-| 21 | Memory upgrade — FAISS semantic search | 🔄 Planned |
-| 22 | Voice recognition training | 🔄 Planned |
+| 1 | Voice pipeline - Whisper, VAD, noisereduce | Complete |
+| 2 | Claude brain + SQLite memory | Complete |
+| 3 | TTS provider facade - Kokoro ONNX CUDA, fail-loud runtime | Complete |
+| 4 | Web scraping - DuckDuckGo + Playwright | Complete |
+| 5 | External visual model layer | Removed |
+| 6 | Speech accuracy - Whisper prompts and calibration | Complete |
+| 7 | Intent router - three-tier keyword classification | Complete |
+| 8 | Screen capture - mss rolling buffer | Complete |
+| 9 | Gemini vision - screen analysis on demand | Complete |
+| 10 | Conversation mode toggle | Complete |
+| 11 | Gemini unified Tier 2 - web + screen context | Complete |
+| 12 | Stage 3a - Proactive Analyst Loop | Complete |
+| 13 | Structured logging - `logs/aria.log` rotation | Complete |
+| 14 | Rich terminal dashboard | Complete |
+| 15 | Market analyst MVP - daily snapshots + spoken summary | Complete |
+| 16 | Stage 3b - notification state + queued insights | Planned |
+| 17 | Stage 3c - finance specialisation, sentiment, news, filings | Planned |
+| 18 | Memory upgrade - semantic search | Planned |
+
+---
+
+## Placeholder Recommendation
+
+The current placeholder is deliberately the simplest option: a terminal-visible state facade. It is cheap to maintain, testable, and keeps the application focused on finance and reliability.
+
+For the next quick visual step, prefer a tiny local tray/window or rich-dashboard panel that shows:
+
+- state: listening / thinking / speaking / idle
+- last mood tag
+- latest market snapshot status
+- queued proactive insight count
+
+That gives immediate feedback without reintroducing a heavy external rendering dependency.
 
 ---
 
@@ -272,11 +293,12 @@ On first run:
 
 | Issue | Reason | Resolution |
 |-------|--------|------------|
-| Kokoro-82M TTS | `kokoro>=0.8` and `misaki>=0.7.5` dropped Python 3.13 support | Revisit when upstream restores 3.13 compatibility |
-| Weather via DuckDuckGo | HTML endpoint returns limited weather data | Gemini reasons over partial results — accuracy varies |
+| Rich UI unavailable | Optional dependency may be missing | App falls back to plain terminal output |
+| Weather via search snippets | Search pages can return partial context | Prefer structured sources in future finance work |
+| Advanced visual model | Not core to finance assistant reliability | Revisit after Stage 3b/3c validation |
 
 ---
 
 ## Author
 
-Chanveer Grewal — [github.com/chansg](https://github.com/chansg)
+Chanveer Grewal - [github.com/chansg](https://github.com/chansg)

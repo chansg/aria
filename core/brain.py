@@ -229,17 +229,16 @@ def _parse_mood_tag(text: str) -> tuple[str, str]:
 
 
 def _trigger_avatar_mood(mood: str) -> None:
-    """Trigger a mood expression on the VTS avatar.
+    """Forward a mood cue to the optional visual layer.
 
     Args:
         mood: Mood tag string (e.g. 'HAPPY', 'SAD').
     """
     try:
-        from avatar.renderer import _controller
-        if _controller:
-            _controller.trigger_mood(mood)
+        from avatar.renderer import trigger_mood
+        trigger_mood(mood)
     except Exception:
-        pass  # Avatar not connected — continue silently
+        pass  # Visual layer unavailable — continue silently
 
 
 def _ensure_complete_sentence(text: str) -> str:
@@ -515,7 +514,7 @@ def _handle_vision(text: str) -> str:
 
     The analyzer never raises — on any failure it returns a
     graceful fallback string. We still parse the mood tag so the
-    VTS avatar reacts appropriately.
+    optional visual layer can react later.
 
     If USE_LOCAL_FALLBACK is True, vision queries return a polite
     decline since Ollama cannot process screenshots.
@@ -660,7 +659,7 @@ def _handle_claude(user_input: str) -> str:
     now = datetime.now()
     system_prompt += f"\n\nCurrent date and time: {now.strftime('%A %d %B %Y, %H:%M')}."
 
-    # Request mood tag prefix for avatar expressions
+    # Request mood tag prefix for the optional visual layer.
     system_prompt += (
         "\n\nIMPORTANT: Begin every response with a mood tag in square brackets. "
         "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD]. "

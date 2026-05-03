@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -44,13 +45,15 @@ _PREFIX_MAP = {
     "core.screen_capture":    "Capture",
     "core.proactive_analyst": "Analyst",
     "core.market_analyst":    "Market",
+    "core.diagnostics":       "Diagnostics",
     "core.memory":            "Memory",
     "core.personality":       "Personality",
     "core.scheduler":         "Scheduler",
     "core.logger":            "Logger",
-    "avatar.vts_controller":  "VTS",
     "avatar.renderer":        "Avatar",
     "voice.speaker":          "Speaker",
+    "voice.tts.piper_provider":  "Piper",
+    "voice.tts.kokoro_provider": "Kokoro",
     "voice.listener":         "Listener",
     "voice.transcriber":      "Transcriber",
     "voice.trainer":          "Trainer",
@@ -62,6 +65,11 @@ _PREFIX_MAP = {
 
 _initialised = False
 _root_logger: logging.Logger | None = None
+_error_hooks_installed = False
+_original_excepthook = sys.excepthook
+_original_threading_excepthook = getattr(threading, "excepthook", None)
+_original_unraisablehook = getattr(sys, "unraisablehook", None)
+_original_stderr = sys.stderr
 
 
 def _initialise() -> None:
@@ -157,6 +165,100 @@ def get_logger(name: str) -> logging.Logger:
         logger.addFilter(_PrefixFilter(prefix))
 
     return logger
+
+
+class _StderrToLogger:
+    """File-like object that forwards stderr lines into aria.log."""
+
+    def __init__(self, logger: logging.Logger, original_stream) -> None:
+        self._logger = logger
+        self._original_stream = original_stream
+        self._buffer = ""
+        self._lock = threading.Lock()
+        self.encoding = getattr(original_stream, "encoding", "utf-8")
+        self.errors = getattr(original_stream, "errors", "replace")
+
+    def write(self, message: str) -> int:
+        if not message:
+            return 0
+
+        with self._lock:
+            self._buffer += message
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                line = line.rstrip("\r")
+                if line.strip():
+                    self._logger.error("%s", line)
+
+        return len(message)
+
+    def flush(self) -> None:
+        with self._lock:
+            line = self._buffer.rstrip("\r\n")
+            self._buffer = ""
+        if line.strip():
+            self._logger.error("%s", line)
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        return self._original_stream.fileno()
+
+
+def install_error_logging(capture_stderr: bool = True) -> None:
+    """Capture uncaught process, thread, and terminal errors in aria.log."""
+    global _error_hooks_installed
+    if _error_hooks_installed:
+        return
+
+    terminal_log = get_logger("Terminal")
+
+    def _handle_exception(exc_type, exc_value, exc_traceback) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            terminal_log.info("KeyboardInterrupt received.")
+            _original_excepthook(exc_type, exc_value, exc_traceback)
+            return
+
+        if issubclass(exc_type, SystemExit):
+            terminal_log.info("SystemExit: %s", exc_value)
+            return
+
+        terminal_log.critical(
+            "Unhandled exception on main thread.",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+
+    def _handle_thread_exception(args) -> None:
+        if issubclass(args.exc_type, SystemExit):
+            return
+
+        thread_name = args.thread.name if args.thread else "unknown"
+        terminal_log.critical(
+            "Unhandled exception in thread %s.",
+            thread_name,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    def _handle_unraisable(args) -> None:
+        terminal_log.error(
+            "Unraisable exception: %s object=%r",
+            args.err_msg,
+            args.object,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _handle_exception
+    if _original_threading_excepthook is not None:
+        threading.excepthook = _handle_thread_exception
+    if _original_unraisablehook is not None:
+        sys.unraisablehook = _handle_unraisable
+
+    if capture_stderr and not isinstance(sys.stderr, _StderrToLogger):
+        sys.stderr = _StderrToLogger(terminal_log, _original_stderr)
+
+    _error_hooks_installed = True
+    terminal_log.debug("Terminal/error logging hooks installed.")
 
 
 def attach_ui(ui) -> None:

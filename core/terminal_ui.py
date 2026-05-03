@@ -19,7 +19,7 @@ Colour scheme:
     Panel borders:  navy_blue (dim)
     Labels:         gold
     States:         green / amber / cyan / dim
-    Module tags:    per-module colour map (VTS purple, Router cyan,
+    Module tags:    per-module colour map (Avatar purple, Router cyan,
                     Analyst gold, Speaker green, Vision blue, etc.)
 
 Graceful fallback:
@@ -52,7 +52,7 @@ except ImportError:
 
 # ── Module colour map ─────────────────────────────────────────────────────────
 MODULE_COLOURS = {
-    "VTS":         "medium_purple",
+    "Avatar":      "medium_purple",
     "Router":      "cyan",
     "Analyst":     "gold1",
     "Market":      "spring_green2",
@@ -70,7 +70,6 @@ MODULE_COLOURS = {
     "Wake":        "pale_green1",
     "Chime":       "grey50",
     "Scheduler":   "wheat1",
-    "Avatar":      "medium_purple",
     "Logger":      "grey50",
     "ERROR":       "bold red",
     "WARNING":     "yellow",
@@ -112,7 +111,7 @@ class AriaUI:
         self._last_response = ""
         self._conv_mode     = True
         self._analysis_mode = False
-        self._vts_status    = "Connecting..."
+        self._avatar_status = "Placeholder"
         self._gemini_status = "Ready"
         # Each entry: (timestamp_str, module_str, message_str, level_str)
         self._log: Deque[Tuple[str, str, str, str]] = deque(maxlen=max_log_lines)
@@ -139,15 +138,15 @@ class AriaUI:
         with self._lock:
             self._analysis_mode = enabled
 
-    def set_vts_status(self, status: str) -> None:
+    def set_avatar_status(self, status: str) -> None:
         with self._lock:
-            self._vts_status = status
+            self._avatar_status = status
 
     def log(self, module: str, message: str, level: str = "INFO") -> None:
         """Add a line to the activity log.
 
         Args:
-            module:  Module display name e.g. 'Router', 'VTS'.
+            module:  Module display name e.g. 'Router', 'Avatar'.
             message: The log message text.
             level:   'INFO', 'WARNING', or 'ERROR'.
         """
@@ -162,21 +161,16 @@ class AriaUI:
             state = self._state
             conv  = self._conv_mode
 
-        # Poll VTS connection state from the controller live — saves the
-        # controller from having to push updates explicitly.
+        # Poll visual placeholder state from the renderer facade.
         try:
-            from avatar.renderer import _controller as _vts_ctrl
-            if _vts_ctrl and _vts_ctrl.connected:
-                vts = "Connected — Hiyori_A"
-            elif _vts_ctrl:
-                vts = "Connecting..."
-            else:
-                vts = "Not started"
+            from avatar.renderer import get_status
+            avatar_status = get_status()
         except Exception:
-            vts = "Unknown"
+            avatar_status = "Unknown"
 
         # Poll analysis-mode flag from the registered ProactiveAnalyst —
-        # same pattern as VTS so brain.py / analyst don't need a callback.
+        # same pattern as visual state so brain.py / analyst don't need
+        # a callback.
         try:
             from core.proactive_analyst import get_instance as _get_analyst
             analyst = _get_analyst()
@@ -197,7 +191,7 @@ class AriaUI:
         t.add_row("Analysis",    Text("ON" if analysis else "OFF",
                                       style="gold1" if analysis else "dim white"))
         t.add_row("",            "")
-        t.add_row("VTS",         Text(vts, style="medium_purple"))
+        t.add_row("Visual",      Text(avatar_status, style="medium_purple"))
         t.add_row("Gemini",      Text(self._gemini_status, style="cornflower_blue"))
 
         return Panel(

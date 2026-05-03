@@ -120,6 +120,7 @@ class ProactiveAnalyst:
         speak_fn: Callable[[str], None],
         set_state_fn: Callable[[str], None],
         trigger_mood_fn: Callable[[str], None],
+        can_speak_fn: Callable[[], bool] | None = None,
     ) -> None:
         """Initialise the proactive analyst.
 
@@ -127,11 +128,15 @@ class ProactiveAnalyst:
             speak_fn: Callable — the speak() function from voice/speaker.py.
                       Called to deliver proactive insights aloud.
             set_state_fn: Callable taking a state name ('idle', 'thinking', etc.).
-                          Forwards to the avatar renderer's state setter.
+                          Forwards to the visual facade's state setter.
             trigger_mood_fn: Callable taking a mood tag (e.g. 'THINKING')
-                             which fires a VTS hotkey via vts_controller.
+                             which forwards a cue to the optional visual layer.
+            can_speak_fn: Optional gate. Returns False while conversation
+                          audio is busy, so proactive speech cannot collide
+                          with a user turn.
         """
         self._speak        = speak_fn
+        self._can_speak    = can_speak_fn or (lambda: True)
         self._set_state    = set_state_fn
         self._trigger_mood = trigger_mood_fn
 
@@ -200,7 +205,7 @@ class ProactiveAnalyst:
         log.info("Proactive analyst stopped.")
 
     def enable(self) -> None:
-        """Enable analysis mode — Aria will speak proactive insights.
+        """Enable analysis mode — insights are logged or spoken per config.
 
         Prints the spoken confirmation explicitly. The analyst speaks
         via the injected speak_fn (bypassing the normal voice-pipeline
@@ -210,7 +215,10 @@ class ProactiveAnalyst:
         with self._lock:
             self.enabled = True
         log.info("Analysis mode: ON")
-        confirmation = "Analysis mode on, Chan. I'll let you know if I spot anything worth flagging."
+        if self._speech_enabled():
+            confirmation = "Analysis mode on, Chan. I'll let you know if I spot anything worth flagging."
+        else:
+            confirmation = "Analysis mode on, Chan. I'll log anything worth flagging without interrupting you."
         spoken_log.info(confirmation)
         self._speak(confirmation)
 
@@ -311,6 +319,25 @@ class ProactiveAnalyst:
                 self._set_state("idle")
                 return
 
+            if not self._speech_enabled():
+                log.info(
+                    "Insight detected — speech disabled until Stage 3b notifications (%d chars): %s",
+                    len(result),
+                    result,
+                )
+                self.last_comment_time = datetime.now()
+                self._set_state("idle")
+                return
+
+            if not self._can_speak():
+                log.info(
+                    "Insight deferred — voice pipeline busy (%d chars): %s",
+                    len(result),
+                    result,
+                )
+                self._set_state("idle")
+                return
+
             # Non-IDLE — speak the insight
             log.info("Insight detected — speaking (%d chars).", len(result))
             self.last_comment_time = datetime.now()
@@ -343,3 +370,12 @@ class ProactiveAnalyst:
             return False
         age = time.time() - LATEST_SCREENSHOT.stat().st_mtime
         return age < MAX_SCREENSHOT_AGE
+
+    def _speech_enabled(self) -> bool:
+        """Return whether proactive insights are allowed to speak aloud."""
+        try:
+            import config
+
+            return bool(getattr(config, "PROACTIVE_ANALYST_SPEAK_INSIGHTS", False))
+        except Exception:
+            return False

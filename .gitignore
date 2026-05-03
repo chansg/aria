@@ -30,7 +30,8 @@ data/usage_log.json
 data/voice_samples/
 data/voice_profile.json
 data/web_cache.json
-data/vts_token.txt
+data/*token*.txt
+data/*token*.json
 data/captures/
 
 # Market analyst — daily snapshots regenerated each fetch
@@ -42,6 +43,9 @@ assets/models/*.onnx
 # Piper voice models (large binary — download separately)
 assets/voices/*.onnx
 assets/voices/*.onnx.json
+assets/voices/**/*.onnx
+assets/voices/**/*.onnx.json
+assets/voices/**/*.bin
 
 # Audio outputs
 assets/sounds/aria_response.wav
