@@ -190,6 +190,23 @@ class AriaUI:
                                       style="bright_green" if conv else "dim white"))
         t.add_row("Analysis",    Text("ON" if analysis else "OFF",
                                       style="gold1" if analysis else "dim white"))
+        try:
+            from core.notifications import list_notifications, unread_count
+
+            notices = unread_count()
+            unread_items = list_notifications(status="unread", limit=1)
+            latest = unread_items[0] if unread_items else None
+            latest_text = (latest or {}).get("text", "")
+        except Exception:
+            notices = 0
+            latest_text = ""
+
+        notice_style = "gold1" if notices else "dim white"
+        t.add_row("Insights",    Text(str(notices), style=notice_style))
+        if latest_text:
+            if len(latest_text) > 42:
+                latest_text = latest_text[:39].rstrip() + "..."
+            t.add_row("Latest", Text(latest_text, style="white"))
         t.add_row("",            "")
         t.add_row("Visual",      Text(avatar_status, style="medium_purple"))
         t.add_row("Gemini",      Text(self._gemini_status, style="cornflower_blue"))

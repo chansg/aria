@@ -7,8 +7,8 @@ Runs as a background daemon thread. Every 60 seconds, reads the latest
 desktop screenshot and sends it to Gemini with an insight-filtering prompt.
 
 Response handling:
-    'IDLE'        → do nothing, stay silent
-    anything else → speak the insight via the voice pipeline
+    'IDLE'        -> do nothing, stay silent
+    anything else -> queue the insight for Stage 3b review by default
 
 Design principles:
     - IDLE is the default. Gemini must be highly confident to return insight.
@@ -18,7 +18,7 @@ Design principles:
 
 Stage roadmap:
     3a (this):  Direct speech, general desktop context
-    3b (future): Notification state — N05 alert, queued insights
+    3b (current): Notification state — N05 alert, queued insights
     3c (future): Finance specialisation — tickers, sentiment, SEC filings
 """
 
@@ -104,10 +104,11 @@ Nothing else."""
 
 
 class ProactiveAnalyst:
-    """Background analyst that monitors the desktop and speaks unprompted.
+    """Background analyst that monitors the desktop and queues insights.
 
     Reads latest.png on a 60-second cycle and sends it to Gemini with
-    a strict insight-filtering prompt. Only non-IDLE responses are spoken.
+    a strict insight-filtering prompt. Non-IDLE responses are queued by
+    default so they do not interrupt live conversation.
 
     Attributes:
         enabled: Whether analysis mode is currently active.
@@ -218,7 +219,7 @@ class ProactiveAnalyst:
         if self._speech_enabled():
             confirmation = "Analysis mode on, Chan. I'll let you know if I spot anything worth flagging."
         else:
-            confirmation = "Analysis mode on, Chan. I'll log anything worth flagging without interrupting you."
+            confirmation = "Analysis mode on, Chan. I'll queue anything worth flagging without interrupting you."
         spoken_log.info(confirmation)
         self._speak(confirmation)
 
@@ -320,8 +321,10 @@ class ProactiveAnalyst:
                 return
 
             if not self._speech_enabled():
+                notification = self._queue_insight(result)
                 log.info(
-                    "Insight detected — speech disabled until Stage 3b notifications (%d chars): %s",
+                    "Insight queued — speech disabled (%s, %d chars): %s",
+                    notification.get("id"),
                     len(result),
                     result,
                 )
@@ -330,8 +333,10 @@ class ProactiveAnalyst:
                 return
 
             if not self._can_speak():
+                notification = self._queue_insight(result)
                 log.info(
-                    "Insight deferred — voice pipeline busy (%d chars): %s",
+                    "Insight queued — voice pipeline busy (%s, %d chars): %s",
+                    notification.get("id"),
                     len(result),
                     result,
                 )
@@ -379,3 +384,17 @@ class ProactiveAnalyst:
             return bool(getattr(config, "PROACTIVE_ANALYST_SPEAK_INSIGHTS", False))
         except Exception:
             return False
+
+    def _queue_insight(self, text: str) -> dict:
+        """Persist a proactive analyst insight for Stage 3b review."""
+        from core.notifications import enqueue_notification
+
+        return enqueue_notification(
+            text,
+            source="proactive_analyst",
+            priority="N05",
+            metadata={
+                "model": self._model_name,
+                "screenshot": str(LATEST_SCREENSHOT),
+            },
+        )

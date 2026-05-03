@@ -77,6 +77,16 @@ INTENT_MAP: dict[str, dict] = {
             "full market update", "detailed market", "market details",
         ],
     },
+    "notifications": {
+        "tier": 1,
+        "keywords": [
+            "queued insight", "queued insights", "notification", "notifications",
+            "what did you notice", "what have you noticed",
+            "anything worth flagging", "anything to flag",
+            "show insights", "read insights", "clear insights",
+            "clear notifications", "mark insights read",
+        ],
+    },
 
     # Tier 2 — web + Ollama, free
     "weather": {
@@ -216,3 +226,21 @@ def handle_calendar() -> str:
     except Exception as e:
         log.error("Calendar lookup error: %s", e)
         return "I couldn't check your schedule right now, Chan."
+
+
+def handle_notifications(text: str = "") -> str:
+    """Return or manage queued proactive analyst notifications."""
+    try:
+        from core.notifications import clear_notifications, mark_all_read, spoken_summary
+
+        text_lower = text.lower()
+        if "clear" in text_lower:
+            removed = clear_notifications()
+            return f"Cleared {removed} queued insight{'s' if removed != 1 else ''}, Chan."
+        if "mark" in text_lower and "read" in text_lower:
+            changed = mark_all_read()
+            return f"Marked {changed} queued insight{'s' if changed != 1 else ''} as read, Chan."
+        return spoken_summary()
+    except Exception as e:
+        log.error("Notification lookup error: %s", e, exc_info=True)
+        return "I couldn't check queued insights right now, Chan."
