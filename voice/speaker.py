@@ -1,102 +1,102 @@
 """
 Aria Speaker Module
 ===================
-Text-to-speech output using Piper TTS with the hfc_female medium
-ONNX voice model. Runs fully locally with no API calls.
+Public text-to-speech surface for Aria.
 
-Generates WAV audio via ONNX inference and plays it through
-the default output device using sounddevice.
-Integrates with the avatar renderer for speaking state and lip-sync.
+Callers use speak(text). The selected synthesis backend is configurable:
+Kokoro ONNX is the preferred provider, while Piper remains the local fallback.
+Playback, chunking, markdown cleanup, and visual amplitude hooks stay here so
+the rest of Aria does not need to know which voice engine is active.
 """
 
-import wave
+from __future__ import annotations
+
 import os
+import re
+import threading
 import time
+from pathlib import Path
+
 import numpy as np
 import sounddevice as sd
-from piper.voice import PiperVoice
-import re
-from config import PIPER_MODEL_PATH, PIPER_SPEAKING_RATE
+
+import config
 from core.logger import get_logger
+from voice.tts.base import TTSProvider, TTSResult
 
 log = get_logger(__name__)
 
 
-# Output WAV path (reused each utterance — overwritten, not accumulated)
-OUTPUT_WAV = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "sounds", "aria_response.wav")
+OUTPUT_WAV = Path(__file__).resolve().parents[1] / "assets" / "sounds" / "aria_response.wav"
 
-# Module-level voice instance (loaded once, reused)
-_voice: PiperVoice = None
+_provider_cache: dict[str, TTSProvider] = {}
+_speak_lock = threading.Lock()
+_speaking_event = threading.Event()
 
 
-def _load_voice() -> PiperVoice:
-    """Load and cache the Piper voice model.
+def _normalise_provider_name(name: str | None) -> str:
+    provider = (name or "piper").strip().lower().replace("_", "-")
+    aliases = {
+        "kokoro": "kokoro-onnx",
+        "kokoro-82m": "kokoro-onnx",
+        "kokoroonnx": "kokoro-onnx",
+        "piper-tts": "piper",
+    }
+    return aliases.get(provider, provider)
 
-    Returns:
-        PiperVoice: Loaded voice instance.
 
-    Raises:
-        FileNotFoundError: If the ONNX model file is missing.
-    """
-    global _voice
-    if _voice is None:
-        if not os.path.exists(PIPER_MODEL_PATH):
-            raise FileNotFoundError(
-                f"[Aria] Voice model not found at {PIPER_MODEL_PATH}. "
-                "Download the hfc_female medium ONNX from HuggingFace "
-                "(rhasspy/piper-voices) into assets/voices/."
-            )
-        log.info("Loading voice model: %s", PIPER_MODEL_PATH)
-        _voice = PiperVoice.load(PIPER_MODEL_PATH)
-        log.info("Voice model loaded (%dHz).", _voice.config.sample_rate)
-    return _voice
+def _provider_chain(preferred_name: str | None = None) -> list[str]:
+    preferred = _normalise_provider_name(preferred_name or getattr(config, "TTS_PROVIDER", "piper"))
+    raw_fallback = getattr(config, "TTS_FALLBACK_PROVIDER", "piper")
+    fallback = _normalise_provider_name(raw_fallback) if raw_fallback else ""
+
+    chain = [preferred]
+    if fallback and fallback != preferred:
+        chain.append(fallback)
+    return chain
+
+
+def is_speaking() -> bool:
+    """Return True while Aria is synthesising or playing speech."""
+    return _speaking_event.is_set()
+
+
+def _load_provider(name: str) -> TTSProvider:
+    provider_name = _normalise_provider_name(name)
+    if provider_name in _provider_cache:
+        return _provider_cache[provider_name]
+
+    if provider_name == "piper":
+        from voice.tts.piper_provider import PiperProvider
+
+        provider = PiperProvider(output_wav=OUTPUT_WAV)
+    elif provider_name == "kokoro-onnx":
+        from voice.tts.kokoro_provider import KokoroOnnxProvider
+
+        provider = KokoroOnnxProvider()
+    else:
+        raise ValueError(f"Unknown TTS provider: {name!r}")
+
+    _provider_cache[provider_name] = provider
+    log.info("TTS provider initialised: %s", provider.name)
+    return provider
 
 
 def _clean_for_speech(text: str) -> str:
-    """Remove markdown formatting characters before TTS synthesis.
-
-    LLMs return markdown-formatted text. Piper TTS reads symbols
-    literally — asterisks become 'asterisk', hashes become 'hash'.
-    This function strips all markdown to produce clean speakable text.
-
-    Args:
-        text: Raw LLM response potentially containing markdown.
-
-    Returns:
-        Clean plain text suitable for TTS synthesis.
-    """
-    # Remove bold/italic asterisks and underscores
-    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
-    text = re.sub(r'_{1,3}(.*?)_{1,3}', r'\1', text)
-    # Remove inline code backticks
-    text = re.sub(r'`{1,3}(.*?)`{1,3}', r'\1', text)
-    # Remove markdown headers
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-    # Remove bullet point dashes and asterisks at line start
-    text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
-    # Remove any remaining lone asterisks
-    text = text.replace('*', '').replace('#', '')
-    # Collapse multiple spaces/newlines into single space
-    text = re.sub(r'\s+', ' ', text).strip()
+    """Remove markdown formatting characters before TTS synthesis."""
+    text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}(.*?)_{1,3}", r"\1", text)
+    text = re.sub(r"`{1,3}(.*?)`{1,3}", r"\1", text)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*]\s+", "", text, flags=re.MULTILINE)
+    text = text.replace("*", "").replace("#", "")
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
 def _split_into_sentences(text: str, max_chunk: int = 300) -> list[str]:
-    """Split text into speakable sentence chunks for Piper TTS.
-
-    Splits at sentence boundaries to produce natural speech rhythm.
-    Chunks exceeding max_chunk characters are split at the nearest
-    comma or clause boundary to prevent timeout issues.
-
-    Args:
-        text: Full response text to split.
-        max_chunk: Maximum characters per chunk before forced split.
-
-    Returns:
-        List of sentence strings ready for sequential TTS synthesis.
-    """
-    # Split on sentence-ending punctuation
-    raw = re.split(r'(?<=[.!?])\s+', text.strip())
+    """Split text into speakable chunks at sentence and clause boundaries."""
+    raw = re.split(r"(?<=[.!?])\s+", text.strip())
     chunks = []
     current = ""
 
@@ -106,9 +106,8 @@ def _split_into_sentences(text: str, max_chunk: int = 300) -> list[str]:
         else:
             if current:
                 chunks.append(current.strip())
-            # If single sentence is too long, split at comma
             if len(sentence) > max_chunk:
-                sub = re.split(r'(?<=,)\s+', sentence)
+                sub = re.split(r"(?<=,)\s+", sentence)
                 sub_chunk = ""
                 for part in sub:
                     if len(sub_chunk) + len(part) <= max_chunk:
@@ -129,121 +128,157 @@ def _split_into_sentences(text: str, max_chunk: int = 300) -> list[str]:
     return [c for c in chunks if c.strip()]
 
 
-def speak(text: str) -> None:
-    """Synthesise text to speech and play it via sounddevice.
+def _synthesize_with_fallback(text: str, preferred_name: str | None = None) -> tuple[TTSResult, str]:
+    chain = _provider_chain(preferred_name)
+    errors: list[str] = []
 
-    Long responses are split into sentence chunks and spoken
-    sequentially to prevent TTS timeout and mid-sentence cut-off.
-    Markdown is stripped before synthesis.
+    for index, provider_name in enumerate(chain):
+        try:
+            provider = _load_provider(provider_name)
+            start = time.time()
+            result = provider.synthesize(text)
+            elapsed = time.time() - start
 
-    Updates avatar state to 'speaking' during playback with
-    amplitude-synced lip movement, then back to 'idle' when finished.
-    Falls back to terminal print if TTS or playback fails.
+            if result.samples.size == 0:
+                raise RuntimeError(f"{provider.name} returned empty audio")
 
-    Args:
-        text: The text string for Aria to speak aloud.
-    """
+            log.debug(
+                "TTS synthesis complete: provider=%s sample_rate=%s samples=%s elapsed=%.2fs",
+                provider.name,
+                result.sample_rate,
+                result.samples.shape,
+                elapsed,
+            )
+            return result, provider.name
+        except Exception as exc:
+            errors.append(f"{provider_name}: {exc}")
+            if index + 1 < len(chain):
+                log.warning(
+                    "TTS provider %s failed: %s. Falling back to %s.",
+                    provider_name,
+                    exc,
+                    chain[index + 1],
+                    exc_info=True,
+                )
+            else:
+                if bool(getattr(config, "TTS_FAIL_LOUD", False)):
+                    log.critical("TTS provider %s failed with no fallback: %s", provider_name, exc, exc_info=True)
+                else:
+                    log.error("TTS provider %s failed: %s", provider_name, exc, exc_info=True)
+
+    raise RuntimeError("All TTS providers failed: " + " | ".join(errors))
+
+
+def speak(text: str, provider: str | None = None) -> None:
+    """Synthesise text to speech and play it via sounddevice."""
     if not text or not text.strip():
         return
 
-    # Strip markdown formatting before synthesis
     text = _clean_for_speech(text)
     chunks = _split_into_sentences(text)
+    chain = _provider_chain(provider)
 
-    log.info("Speaking %d chunk(s), %d total chars.", len(chunks), len(text))
+    if _speak_lock.locked():
+        log.info("TTS busy — waiting for current speech to finish.")
 
-    # Update avatar state (imported here to avoid circular imports)
-    try:
-        from avatar.renderer import set_speaking, set_idle, set_amplitude
-        set_speaking()
-    except ImportError:
-        set_speaking = set_idle = set_amplitude = None
+    with _speak_lock:
+        _speaking_event.set()
+        log.info(
+            "Speaking %d chunk(s), %d total chars. provider=%s fallback=%s",
+            len(chunks),
+            len(text),
+            chain[0],
+            chain[1] if len(chain) > 1 else "none",
+        )
 
-    for i, chunk in enumerate(chunks):
         try:
-            _speak_sync(chunk)
-        except FileNotFoundError as e:
-            log.error("on chunk %d/%d: %s", i + 1, len(chunks), e)
-            log.error("(text): %s", chunk)
-            break
-        except Exception as e:
-            log.error("on chunk %d/%d: %s", i + 1, len(chunks), e)
-            log.error("(text): %s", chunk)
+            from avatar.renderer import set_speaking
 
-    try:
-        from avatar.renderer import set_idle, set_amplitude
-        set_amplitude(0.0)
-        set_idle()
-    except ImportError:
-        pass
+            set_speaking()
+        except Exception:
+            pass
+
+        try:
+            for i, chunk in enumerate(chunks):
+                try:
+                    log.info(
+                        "Synthesising TTS chunk %d/%d via %s (%d chars).",
+                        i + 1,
+                        len(chunks),
+                        chain[0],
+                        len(chunk),
+                    )
+                    result, provider_name = _synthesize_with_fallback(chunk, preferred_name=provider)
+                    _play_audio(result, provider_name)
+                except Exception as exc:
+                    log.error("TTS failed on chunk %d/%d: %s", i + 1, len(chunks), exc, exc_info=True)
+                    log.error("(text): %s", chunk)
+                    break
+        finally:
+            _speaking_event.clear()
+            try:
+                from avatar.renderer import set_amplitude, set_idle
+
+                set_amplitude(0.0)
+                set_idle()
+            except Exception:
+                pass
 
 
-def _speak_sync(text: str) -> None:
-    """Synchronous implementation of text-to-speech with lip-sync.
+def _mono_for_amplitude(samples: np.ndarray) -> np.ndarray:
+    if samples.ndim == 1:
+        return samples
+    if samples.ndim == 2 and samples.shape[1] > 0:
+        return samples[:, 0]
+    return samples.reshape(-1)
 
-    Generates a WAV via Piper TTS, then plays it using sounddevice
-    while feeding amplitude data to the avatar for lip-sync.
 
-    Args:
-        text: The text to speak.
-    """
-    voice = _load_voice()
+def _normalise_playback(samples: np.ndarray) -> np.ndarray:
+    playback = np.asarray(samples, dtype=np.float32)
+    if playback.size == 0:
+        return playback
 
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(OUTPUT_WAV), exist_ok=True)
+    peak = float(np.max(np.abs(playback)))
+    if peak > 1.0:
+        playback = playback / peak
+    return playback
 
-    # Synthesise to WAV file (synthesize_wav handles WAV headers)
-    with wave.open(OUTPUT_WAV, "wb") as wav_file:
-        voice.synthesize_wav(text, wav_file)
 
-    # Read the WAV data for playback and amplitude analysis
-    with wave.open(OUTPUT_WAV, "rb") as wf:
-        n_frames = wf.getnframes()
-        sample_rate = wf.getframerate()
-        n_channels = wf.getnchannels()
-        raw_data = wf.readframes(n_frames)
+def _play_audio(result: TTSResult, provider_name: str) -> None:
+    """Play normalised float32 audio and feed amplitude to the visual facade."""
+    audio_playback = _normalise_playback(result.samples)
+    audio_mono = _mono_for_amplitude(audio_playback)
+    sample_rate = int(result.sample_rate)
+    duration = len(audio_mono) / sample_rate if sample_rate else 0
 
-    audio_array = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32)
-
-    # If stereo, take first channel for amplitude analysis
-    if n_channels > 1:
-        audio_array = audio_array[::n_channels]
-
-    # Normalise to float32 [-1.0, 1.0] for sounddevice
-    audio_playback = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
-    if n_channels > 1:
-        audio_playback = audio_playback.reshape(-1, n_channels)
-
-    # Start non-blocking playback
+    log.debug("Playing TTS audio: provider=%s duration=%.2fs sample_rate=%s", provider_name, duration, sample_rate)
     sd.play(audio_playback, samplerate=sample_rate)
 
-    # Feed amplitude to the avatar during playback
-    chunk_samples = int(sample_rate * 0.05)  # 50ms chunks
+    chunk_samples = int(sample_rate * 0.05)
     start_time = time.time()
 
     try:
         from avatar.renderer import set_amplitude
-    except ImportError:
+    except Exception:
         set_amplitude = None
 
     while sd.get_stream().active:
-        if set_amplitude and len(audio_array) > 0:
+        if set_amplitude and len(audio_mono) > 0:
             elapsed = time.time() - start_time
             sample_pos = int(elapsed * sample_rate)
 
-            if sample_pos < len(audio_array):
-                chunk_end = min(sample_pos + chunk_samples, len(audio_array))
-                chunk = audio_array[sample_pos:chunk_end]
-                rms = np.sqrt(np.mean(chunk ** 2)) if len(chunk) > 0 else 0
-                # Normalise to 0.0-1.0 range (typical speech RMS ~2000-8000)
-                amplitude = min(1.0, rms / 6000.0)
+            if sample_pos < len(audio_mono):
+                chunk_end = min(sample_pos + chunk_samples, len(audio_mono))
+                chunk = audio_mono[sample_pos:chunk_end]
+                rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) > 0 else 0.0
+                amplitude = min(1.0, rms / 0.20)
                 set_amplitude(amplitude)
             else:
                 set_amplitude(0.0)
 
         time.sleep(0.05)
 
-    sd.wait()  # Ensure playback is fully complete
+    sd.wait()
 
     if set_amplitude:
         set_amplitude(0.0)

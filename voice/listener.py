@@ -29,24 +29,55 @@ log = get_logger(__name__)
 _silence_threshold: float = SILENCE_THRESHOLD
 
 
+def _chunk_rms(audio_chunk: bytes) -> float:
+    """Return RMS amplitude for a raw int16 PCM audio chunk."""
+    audio_data = np.frombuffer(audio_chunk, dtype=np.int16)
+    if audio_data.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(audio_data.astype(np.float32) ** 2)))
+
+
 def get_audio_devices():
     """List all available audio input devices.
 
     Returns:
         list[dict]: List of dicts with 'index', 'name', and 'channels' for each input device.
     """
-    audio = pyaudio.PyAudio()
-    devices = []
-    for i in range(audio.get_device_count()):
-        info = audio.get_device_info_by_index(i)
-        if info["maxInputChannels"] > 0:
-            devices.append({
-                "index": i,
-                "name": info["name"],
-                "channels": info["maxInputChannels"],
-            })
-    audio.terminate()
-    return devices
+    try:
+        audio = pyaudio.PyAudio()
+    except Exception as e:
+        log.error("Failed to initialise PyAudio while listing devices: %s", e, exc_info=True)
+        return []
+
+    try:
+        try:
+            default_input = audio.get_default_input_device_info()
+            default_input_index = int(default_input.get("index"))
+        except Exception:
+            default_input_index = None
+
+        devices = []
+        for i in range(audio.get_device_count()):
+            info = audio.get_device_info_by_index(i)
+            if info["maxInputChannels"] > 0:
+                host_api_name = None
+                try:
+                    host_api = audio.get_host_api_info_by_index(info.get("hostApi"))
+                    host_api_name = host_api.get("name")
+                except Exception:
+                    host_api_name = None
+
+                devices.append({
+                    "index": i,
+                    "name": info["name"],
+                    "channels": info["maxInputChannels"],
+                    "host_api": host_api_name,
+                    "default_sample_rate": info.get("defaultSampleRate"),
+                    "is_default": i == default_input_index,
+                })
+        return devices
+    finally:
+        audio.terminate()
 
 
 def calibrate_silence(device_index: int = None, duration: float = 2.0) -> float:
@@ -75,7 +106,20 @@ def calibrate_silence(device_index: int = None, duration: float = 2.0) -> float:
     if device_index is not None:
         stream_kwargs["input_device_index"] = device_index
 
-    stream = audio.open(**stream_kwargs)
+    log.debug(
+        "Opening calibration stream: device_index=%s rate=%s channels=%s chunk=%s",
+        device_index,
+        SAMPLE_RATE,
+        CHANNELS,
+        CHUNK_SIZE,
+    )
+
+    try:
+        stream = audio.open(**stream_kwargs)
+    except Exception as e:
+        audio.terminate()
+        log.error("Failed to open calibration stream: %s", e, exc_info=True)
+        raise
 
     log.info("Calibrating microphone — stay quiet for 2 seconds...")
     rms_values = []
@@ -83,9 +127,7 @@ def calibrate_silence(device_index: int = None, duration: float = 2.0) -> float:
 
     for _ in range(chunks_needed):
         data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
-        audio_data = np.frombuffer(data, dtype=np.int16)
-        rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
-        rms_values.append(rms)
+        rms_values.append(_chunk_rms(data))
 
     stream.stop_stream()
     stream.close()
@@ -106,9 +148,7 @@ def is_silent(audio_chunk: bytes) -> bool:
     Returns:
         True if the chunk's RMS amplitude is below the calibrated threshold.
     """
-    audio_data = np.frombuffer(audio_chunk, dtype=np.int16)
-    rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
-    return rms < _silence_threshold
+    return _chunk_rms(audio_chunk) < _silence_threshold
 
 
 def preprocess_audio(audio_bytes: bytes) -> bytes:
@@ -169,9 +209,16 @@ def record_audio(device_index: int = None) -> bytes:
         stream_kwargs["input_device_index"] = device_index
 
     try:
+        log.debug(
+            "Opening audio stream: device_index=%s rate=%s channels=%s chunk=%s",
+            device_index,
+            SAMPLE_RATE,
+            CHANNELS,
+            CHUNK_SIZE,
+        )
         stream = audio.open(**stream_kwargs)
     except Exception as e:
-        log.error("Failed to open audio stream: %s", e)
+        log.error("Failed to open audio stream: %s", e, exc_info=True)
         audio.terminate()
         return b""
 
@@ -181,18 +228,21 @@ def record_audio(device_index: int = None) -> bytes:
     silent_chunks = 0
     has_speech = False
     start_time = time.time()
+    peak_rms = 0.0
     chunks_for_silence = int(SILENCE_DURATION * SAMPLE_RATE / CHUNK_SIZE)
 
     try:
         while True:
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             elapsed = time.time() - start_time
+            rms = _chunk_rms(data)
+            peak_rms = max(peak_rms, rms)
 
             if elapsed > MAX_RECORDING_DURATION:
                 log.info("Max recording duration (%ds) reached.", MAX_RECORDING_DURATION)
                 break
 
-            if is_silent(data):
+            if rms < _silence_threshold:
                 silent_chunks += 1
                 if has_speech:
                     frames.append(data)
@@ -201,11 +251,21 @@ def record_audio(device_index: int = None) -> bytes:
                     break
             else:
                 silent_chunks = 0
+                if not has_speech:
+                    log.debug(
+                        "Speech detected — RMS %.0f above threshold %.0f.",
+                        rms,
+                        _silence_threshold,
+                    )
                 has_speech = True
                 frames.append(data)
 
         if not has_speech:
-            log.debug("No speech detected.")
+            log.debug(
+                "No speech detected (peak RMS %.0f, threshold %.0f).",
+                peak_rms,
+                _silence_threshold,
+            )
             return b""
 
     finally:
@@ -215,7 +275,7 @@ def record_audio(device_index: int = None) -> bytes:
 
     raw_audio = b"".join(frames)
     duration = len(raw_audio) / (SAMPLE_RATE * 2)  # 2 bytes per sample (int16)
-    log.info("Captured %.1fs of audio.", duration)
+    log.info("Captured %.1fs of audio (peak RMS %.0f).", duration, peak_rms)
 
     if duration < MIN_RECORDING_DURATION:
         log.debug("Too short (%.1fs < %ds) — ignoring.", duration, MIN_RECORDING_DURATION)

@@ -1,11 +1,10 @@
 """
 avatar/animations.py
 --------------------
-Animation state definitions for Aria's VTube Studio avatar.
+Animation state definitions for Aria's visual placeholder.
 
-Previously drove Pygame sprite swapping. Now maps Aria's internal
-states to descriptive labels used by vts_controller.py for hotkey
-triggering. Actual animations are handled by VTube Studio.
+The current renderer is intentionally local and lightweight. These
+constants remain as the stable vocabulary for any future visual layer.
 """
 
 # Avatar state constants — used across the codebase

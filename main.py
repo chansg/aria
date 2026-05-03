@@ -11,8 +11,9 @@ Two modes controlled by a toggle button on the avatar overlay:
   MODE OFF — Sleep mode. Dormant until "Aria" is heard via wake word
              detection. Wakes for one question, then returns to sleep.
 
-Avatar uses VTube Studio via pyvts WebSocket connection.
-VTS handles all rendering, lip sync via VB-Audio Virtual Cable.
+The visual layer currently uses a local placeholder facade. The core
+voice and reasoning pipeline still emits state/mood signals so a future
+visual model can be added behind the same adapter.
 
 Usage:
     python main.py
@@ -28,7 +29,7 @@ from core.brain import think
 from core.memory import init_memory
 from core.personality import load_personality
 from core.scheduler import init_scheduler, shutdown_scheduler
-from voice.speaker import speak
+from voice.speaker import is_speaking, speak
 from avatar.renderer import (
     create_avatar,
     set_idle      as _renderer_set_idle,
@@ -39,7 +40,12 @@ from avatar.renderer import (
 from voice.trainer import run_calibration, get_profile_summary
 from core.screen_capture import ScreenCapture
 from core.proactive_analyst import ProactiveAnalyst, register as register_analyst
-from core.logger import get_logger, attach_ui
+from core.logger import get_logger, attach_ui, install_error_logging
+from core.diagnostics import (
+    log_audio_devices,
+    log_selected_audio_device,
+    log_startup_diagnostics,
+)
 from core.terminal_ui import AriaUI, RICH_AVAILABLE
 
 log        = get_logger(__name__)        # [Aria]
@@ -100,6 +106,28 @@ try:
 except Exception:
     _free_conversation.set()       # Default to ON if config missing
 
+_voice_turn_active = threading.Event()
+
+
+def _conversation_voice_provider() -> str | None:
+    """Return the low-latency voice provider for live conversation."""
+    try:
+        import config
+
+        return getattr(config, "TTS_CONVERSATION_PROVIDER", None)
+    except Exception:
+        return None
+
+
+def speak_conversation(text: str) -> None:
+    """Speak user-facing conversation audio through the fast provider."""
+    speak(text, provider=_conversation_voice_provider())
+
+
+def _can_proactive_speak() -> bool:
+    """Allow proactive speech only when it cannot collide with a user turn."""
+    return not _voice_turn_active.is_set() and not is_speaking()
+
 
 def is_free_conversation() -> bool:
     """Check whether free conversation mode is active.
@@ -124,13 +152,13 @@ def toggle_free_conversation() -> bool:
         log.info("Conversation mode: OFF — name required.")
         if _ui is not None:
             _ui.set_conv_mode(False)
-        speak("Conversation mode off. Say my name to get my attention.")
+        speak_conversation("Conversation mode off. Say my name to get my attention.")
     else:
         _free_conversation.set()
         log.info("Conversation mode: ON — listening freely.")
         if _ui is not None:
             _ui.set_conv_mode(True)
-        speak("Conversation mode on. I'm listening.")
+        speak_conversation("Conversation mode on. I'm listening.")
     return _free_conversation.is_set()
 
 
@@ -158,7 +186,8 @@ def _set_ui_state(state: str) -> None:
 
 # ── State setter wrappers ─────────────────────────────────────────────────────
 # Voice pipeline calls these instead of avatar.renderer.set_X directly so each
-# state change drives BOTH the VTS avatar AND the rich dashboard's Status panel
+# state change drives BOTH the visual placeholder AND the rich dashboard's
+# Status panel
 # from a single call site. Existing voice_pipeline code is unmodified.
 
 def set_idle() -> None:
@@ -205,17 +234,16 @@ def _analyst_set_state(state: str) -> None:
 
 
 def _analyst_trigger_mood(mood: str) -> None:
-    """Trigger a VTS mood hotkey from the analyst, if VTS is connected.
+    """Forward a mood cue from the analyst to the visual placeholder.
 
     Args:
         mood: Mood tag (e.g. 'THINKING', 'HAPPY').
     """
     try:
-        from avatar.renderer import _controller
-        if _controller:
-            _controller.trigger_mood(mood)
+        from avatar.renderer import trigger_mood
+        trigger_mood(mood)
     except Exception:
-        pass  # VTS not connected — continue silently
+        pass  # Visual layer is optional — continue silently
 
 
 def print_banner():
@@ -234,6 +262,7 @@ def select_audio_device() -> int | None:
         The selected device index, or None for the system default.
     """
     devices = get_audio_devices()
+    log_audio_devices(devices)
     if not devices:
         log.error("No audio input devices found!")
         sys.exit(1)
@@ -247,6 +276,7 @@ def select_audio_device() -> int | None:
     choice = input("Select device (number or 'd' for default): ").strip().lower()
     if choice == "d" or choice == "":
         log.info("Using system default microphone.")
+        log_selected_audio_device(None)
         return None
 
     try:
@@ -255,12 +285,15 @@ def select_audio_device() -> int | None:
         if index in valid_indices:
             selected = next(d for d in devices if d["index"] == index)
             log.info("Using: %s", selected['name'])
+            log_selected_audio_device(selected)
             return index
         else:
             log.warning("Invalid device index. Using system default.")
+            log_selected_audio_device(None)
             return None
     except ValueError:
         log.warning("Invalid input. Using system default.")
+        log_selected_audio_device(None)
         return None
 
 
@@ -283,7 +316,7 @@ def announce_reminder(text: str) -> None:
     Args:
         text: The reminder text to announce.
     """
-    speak(text)
+    speak_conversation(text)
 
 
 def voice_pipeline(device_index: int | None, avatar) -> None:
@@ -297,19 +330,20 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
         device_index: The audio input device index (None for default).
         avatar: The AvatarWindow instance to update and close on exit.
     """
-    # Pre-load Whisper model
-    load_model()
-    print()
-
-    # Verbal startup greeting
-    log.info("All systems online.")
-    speak("Hello Chan. I'm online and ready.")
-    log.info("Say my name to get my attention, or press Ctrl+C to quit.")
-    print()
-
-    set_idle()
-
+    log.info("Voice pipeline starting: device_index=%s", device_index)
     try:
+        # Pre-load Whisper model
+        load_model()
+        print()
+
+        # Verbal startup greeting
+        log.info("All systems online.")
+        speak_conversation("Hello Chan. I'm online and ready.")
+        log.info("Say my name to get my attention, or press Ctrl+C to quit.")
+        print()
+
+        set_idle()
+
         while True:
             try:
                 if is_conversation_mode():
@@ -322,59 +356,63 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         continue
 
                     # Transcribe everything
-                    set_thinking()
-                    text = transcribe_audio(audio_data)
+                    _voice_turn_active.set()
+                    try:
+                        set_thinking()
+                        text = transcribe_audio(audio_data)
 
-                    if not text:
+                        if not text:
+                            set_idle()
+                            continue
+
+                        # Check for conversation mode toggle commands
+                        text_lower = text.strip().lower()
+                        if any(phrase in text_lower for phrase in (
+                            "conversation mode on", "free conversation on",
+                        )):
+                            if not is_free_conversation():
+                                toggle_free_conversation()
+                            set_idle()
+                            continue
+
+                        if any(phrase in text_lower for phrase in (
+                            "conversation mode off", "free conversation off",
+                        )):
+                            if is_free_conversation():
+                                toggle_free_conversation()
+                            set_idle()
+                            continue
+
+                        # Name check — bypassed in free conversation mode
+                        if not is_free_conversation() and not is_addressed_to_aria(text):
+                            set_idle()
+                            continue
+
+                        chan_log.info("%s", text)
+
+                        # Check for exit commands
+                        if any(cmd in text_lower for cmd in (
+                            "quit", "exit", "goodbye", "shut down", "shutdown",
+                        )):
+                            log.info("Goodbye, Chan. Talk soon.")
+                            speak_conversation("Goodbye, Chan. Talk soon.")
+                            break
+
+                        # Think and respond
+                        set_thinking()
+                        log.info("Thinking...")
+                        response = think(text)
+                        log.info("%s", response)
+
+                        # Mirror to UI's Last Response panel before speaking
+                        if _ui is not None and response:
+                            _ui.set_last_response(response)
+
+                        # Speak (avatar state handled inside speak())
+                        speak_conversation(response)
                         set_idle()
-                        continue
-
-                    # Check for conversation mode toggle commands
-                    text_lower = text.strip().lower()
-                    if any(phrase in text_lower for phrase in (
-                        "conversation mode on", "free conversation on",
-                    )):
-                        if not is_free_conversation():
-                            toggle_free_conversation()
-                        set_idle()
-                        continue
-
-                    if any(phrase in text_lower for phrase in (
-                        "conversation mode off", "free conversation off",
-                    )):
-                        if is_free_conversation():
-                            toggle_free_conversation()
-                        set_idle()
-                        continue
-
-                    # Name check — bypassed in free conversation mode
-                    if not is_free_conversation() and not is_addressed_to_aria(text):
-                        set_idle()
-                        continue
-
-                    chan_log.info("%s", text)
-
-                    # Check for exit commands
-                    if any(cmd in text_lower for cmd in (
-                        "quit", "exit", "goodbye", "shut down", "shutdown",
-                    )):
-                        log.info("Goodbye, Chan. Talk soon.")
-                        speak("Goodbye, Chan. Talk soon.")
-                        break
-
-                    # Think and respond
-                    set_thinking()
-                    log.info("Thinking...")
-                    response = think(text)
-                    log.info("%s", response)
-
-                    # Mirror to UI's Last Response panel before speaking
-                    if _ui is not None and response:
-                        _ui.set_last_response(response)
-
-                    # Speak (avatar state handled inside speak())
-                    speak(response)
-                    set_idle()
+                    finally:
+                        _voice_turn_active.clear()
 
                 else:
                     # ── SLEEP MODE ────────────────────────────────────
@@ -409,7 +447,7 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         log.info("%s", response)
                         if _ui is not None and response:
                             _ui.set_last_response(response)
-                        speak(response)
+                        speak_conversation(response)
 
                     # Return to sleep after answering
                     set_dormant()
@@ -417,6 +455,11 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
             except KeyboardInterrupt:
                 log.info("Interrupted. Goodbye, Chan.")
                 break
+            except Exception as e:
+                log.error("Voice pipeline error: %s", e, exc_info=True)
+                set_idle()
+    except Exception as e:
+        log.critical("Voice pipeline fatal error: %s", e, exc_info=True)
     finally:
         shutdown_scheduler()
         if _screen_capture:
@@ -431,10 +474,11 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
 def run_aria():
     """Initialise all systems, then launch avatar + voice pipeline.
 
-    The avatar connects to VTube Studio in a background thread.
+    The visual placeholder is initialised before the voice pipeline.
     The voice pipeline runs in a daemon background thread.
     """
     log.info("Initialising systems...")
+    log_startup_diagnostics()
     print()
 
     # Initialise core systems
@@ -476,11 +520,12 @@ def run_aria():
     # Voice profile status and optional calibration
     print(get_profile_summary())
     cal_choice = input("Run voice calibration? (y/N): ").strip().lower()
+    log.info("Voice calibration requested: %s", cal_choice == "y")
     if cal_choice == "y":
         run_calibration(device_index=device_index)
     print()
 
-    # Create avatar (connects to VTube Studio in background)
+    # Create visual placeholder
     avatar = create_avatar(on_mode_toggle=toggle_conversation_mode)
 
     # Initialise proactive analyst (Stage 3a)
@@ -488,7 +533,8 @@ def run_aria():
     global _proactive_analyst
     try:
         _proactive_analyst = ProactiveAnalyst(
-            speak_fn=speak,
+            speak_fn=speak_conversation,
+            can_speak_fn=_can_proactive_speak,
             set_state_fn=_analyst_set_state,
             trigger_mood_fn=_analyst_trigger_mood,
         )
@@ -509,7 +555,7 @@ def run_aria():
 
     # Initialise the rich terminal dashboard (Prompt 3 — Phase 17).
     # The UI mirrors logger output into an activity panel, exposes Aria's
-    # current state + last response, and polls VTS / analyst status. If
+    # current state + last response, and polls visual / analyst status. If
     # rich isn't installed we fall back to the previous avatar.run() which
     # blocks the main thread on a quiet sleep loop. set_conv_mode is
     # seeded so the panel matches the actual flag at startup.
@@ -533,8 +579,8 @@ def run_aria():
     pipeline_thread.start()
 
     # Block the main thread on the dashboard until Ctrl+C. With no UI we
-    # fall back to avatar.run() which keeps the VTS connection alive on
-    # a sleep loop until interrupted — same behaviour as before this PR.
+    # fall back to avatar.run() which keeps the process alive on a sleep
+    # loop until interrupted.
     if _ui is not None:
         _ui.run()
     else:
@@ -545,8 +591,13 @@ def run_aria():
 
 def main():
     """Main entry point for Aria."""
+    install_error_logging()
     print_banner()
-    run_aria()
+    try:
+        run_aria()
+    except Exception as e:
+        log.critical("Fatal Aria error: %s", e, exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

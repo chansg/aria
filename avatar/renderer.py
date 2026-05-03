@@ -1,38 +1,47 @@
 """
 avatar/renderer.py
 ------------------
-Avatar interface for Aria. Delegates all rendering to VTube Studio
-via VTSController. Pygame has been removed entirely.
+Visual-state facade for Aria.
 
-Provides the same public interface as the old Pygame renderer so
-main.py requires minimal changes:
-    create_avatar()  — initialises and starts the VTS controller
-    set_idle()       — sets avatar to idle state
-    set_listening()  — sets avatar to listening state
-    set_thinking()   — sets avatar to thinking state
-    set_dormant()    — sets avatar to dormant/sleeping state
+The previous external avatar integration has been removed. This module
+keeps the public surface used by main.py, speaker.py, and brain.py while
+backing it with a lightweight local placeholder. That lets the core voice
+and reasoning pipeline keep emitting state/mood signals without depending
+on any external visual model.
+
+Future visual layers should implement the same small interface:
+    create_avatar()  - initialise and return a handle
+    set_idle()       - set visual state to idle
+    set_listening()  - set visual state to listening
+    set_thinking()   - set visual state to thinking
+    set_speaking()   - set visual state to speaking
+    set_dormant()    - set visual state to dormant
+    trigger_mood()   - record or render a mood cue
 """
 
-from avatar.vts_controller import VTSController
+from __future__ import annotations
+
+import time
+
 from core.logger import get_logger
 
 log = get_logger(__name__)
 
-_controller: VTSController = None
+_controller: "PlaceholderAvatar | None" = None
 
 
 def create_avatar(on_mode_toggle=None) -> "AvatarHandle":
-    """Initialise the VTS controller and connect to VTube Studio.
+    """Initialise the local visual placeholder.
 
     Args:
         on_mode_toggle: Optional callback for mode toggle (retained for
-                        compatibility with main.py — not used with VTS).
+                        compatibility with main.py).
 
     Returns:
         An AvatarHandle instance with a run() and close() method.
     """
     global _controller
-    _controller = VTSController()
+    _controller = PlaceholderAvatar()
     _controller.start()
     return AvatarHandle(_controller, on_mode_toggle=on_mode_toggle)
 
@@ -68,33 +77,86 @@ def set_dormant() -> None:
 
 
 def set_amplitude(amplitude: float) -> None:
-    """Set the current audio amplitude for lip-sync animation.
+    """Accept an audio amplitude signal for future visual layers.
 
-    With VTube Studio, lip sync is handled by VB-Audio Virtual Cable
-    routing directly to VTS. This function is retained for interface
-    compatibility but is a no-op.
+    The placeholder intentionally does nothing with amplitude. Keeping this
+    hook avoids coupling speaker.py to a specific future renderer.
 
     Args:
         amplitude: Normalised amplitude (0.0 to 1.0). Ignored.
     """
-    pass
+    if _controller:
+        _controller.set_amplitude(amplitude)
+
+
+def trigger_mood(mood: str) -> None:
+    """Record a mood cue for the active placeholder.
+
+    Args:
+        mood: Mood tag from a model response, e.g. HAPPY or THINKING.
+    """
+    if _controller:
+        _controller.trigger_mood(mood)
+
+
+def get_status() -> str:
+    """Return a short status string for the terminal dashboard."""
+    if not _controller:
+        return "Not started"
+    return _controller.status
+
+
+class PlaceholderAvatar:
+    """Minimal in-process placeholder for Aria's future visual layer.
+
+    It stores the current state and last mood, logs startup once, and avoids
+    all external connections. This is deliberately boring: the visual system
+    is now an adapter boundary instead of a runtime dependency.
+    """
+
+    def __init__(self) -> None:
+        self.state = "idle"
+        self.last_mood = "NEUTRAL"
+        self.running = False
+
+    @property
+    def status(self) -> str:
+        return f"Placeholder - {self.state}"
+
+    def start(self) -> None:
+        self.running = True
+        log.info("Visual placeholder active.")
+
+    def stop(self) -> None:
+        if self.running:
+            log.info("Visual placeholder stopped.")
+        self.running = False
+
+    def set_state(self, state: str) -> None:
+        self.state = state
+
+    def set_amplitude(self, amplitude: float) -> None:
+        return
+
+    def trigger_mood(self, mood: str) -> None:
+        self.last_mood = mood.upper()
 
 
 class AvatarHandle:
     """Lightweight handle returned by create_avatar().
 
-    Replaces the old AvatarWindow that ran the Pygame main loop.
-    VTS handles its own window — this class just manages lifecycle.
+    The handle manages placeholder lifecycle and provides a blocking run()
+    fallback when the rich dashboard is unavailable.
 
     Attributes:
-        controller: The underlying VTSController instance.
+        controller: The underlying PlaceholderAvatar instance.
     """
 
-    def __init__(self, controller: VTSController, on_mode_toggle=None):
-        """Initialise the handle with a VTS controller.
+    def __init__(self, controller: PlaceholderAvatar, on_mode_toggle=None):
+        """Initialise the handle with the placeholder controller.
 
         Args:
-            controller: The active VTSController instance.
+            controller: The active PlaceholderAvatar instance.
             on_mode_toggle: Optional mode toggle callback from main.py.
         """
         self.controller = controller
@@ -103,19 +165,17 @@ class AvatarHandle:
     def run(self) -> None:
         """Block the main thread until Aria exits.
 
-        Previously this ran the Pygame event loop. Now it simply keeps
-        the main thread alive while the voice pipeline runs in the
-        background thread.
+        Keeps the process alive while the voice pipeline runs in the
+        background thread when the rich dashboard is not active.
         """
-        log.info("VTube Studio mode active. Press Ctrl+C to quit.")
+        log.info("Visual placeholder active. Press Ctrl+C to quit.")
         try:
             while True:
-                import time
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("Shutting down...")
 
     def close(self) -> None:
-        """Stop the VTS controller and close the connection."""
+        """Stop the placeholder controller."""
         if self.controller:
             self.controller.stop()
