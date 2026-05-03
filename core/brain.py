@@ -41,7 +41,7 @@ try:
     from config import USE_LOCAL_FALLBACK
 except ImportError:
     USE_LOCAL_FALLBACK = False
-from core.router import classify, handle_time, handle_date, handle_calendar
+from core.router import classify, handle_time, handle_date, handle_calendar, handle_notifications
 from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
@@ -349,6 +349,8 @@ def think(user_input: str) -> str:
             response = _handle_analysis_toggle(user_input)
         elif intent == "market":
             response = _handle_market_query(user_input)
+        elif intent == "notifications":
+            response = handle_notifications(user_input)
         else:
             response = handle_time()  # fallback
 

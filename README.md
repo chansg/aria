@@ -84,6 +84,7 @@ aria/
 │   ├── router.py                  # Intent classification
 │   ├── market_analyst.py          # yfinance snapshots + spoken summary
 │   ├── memory.py                  # SQLite episodic + semantic memory
+│   ├── notifications.py           # Stage 3b queued insight store
 │   ├── personality.py             # System prompt builder, interaction tracking
 │   ├── proactive_analyst.py       # Optional Gemini screenshot loop
 │   ├── scheduler.py               # APScheduler reminders
@@ -109,7 +110,8 @@ aria/
 │   └── test_market_analyst.py
 │
 ├── docs/
-│   └── voice-runtime.md          # Kokoro CUDA baseline and troubleshooting
+│   ├── stage-3b-notifications.md  # Queued insight design
+│   └── voice-runtime.md           # Kokoro CUDA baseline and troubleshooting
 │
 ├── data/                          # Runtime data - never commit private files
 ├── assets/                        # Local audio/model/sprite assets
@@ -249,6 +251,26 @@ The spoken summary is intentionally short by default. Full mode gives one senten
 
 ---
 
+## Stage 3b Notifications
+
+When analysis mode is enabled, proactive analyst insights are queued instead of
+spoken by default. This protects live conversation from interruption while still
+preserving useful observations.
+
+Useful voice commands:
+
+```text
+Aria, what did you notice?
+Aria, show queued insights
+Aria, mark insights read
+Aria, clear notifications
+```
+
+Unread insight count and the latest unread insight appear in the terminal
+dashboard. The queue is stored at `data/notifications.jsonl`.
+
+---
+
 ## Phase Status
 
 | Phase | Feature | Status |
@@ -268,7 +290,7 @@ The spoken summary is intentionally short by default. Full mode gives one senten
 | 13 | Structured logging - `logs/aria.log` rotation | Complete |
 | 14 | Rich terminal dashboard | Complete |
 | 15 | Market analyst MVP - daily snapshots + spoken summary | Complete |
-| 16 | Stage 3b - notification state + queued insights | Planned |
+| 16 | Stage 3b - notification state + queued insights | In progress |
 | 17 | Stage 3c - finance specialisation, sentiment, news, filings | Planned |
 | 18 | Memory upgrade - semantic search | Planned |
 

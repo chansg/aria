@@ -25,6 +25,7 @@ OLLAMA_MODEL = "mistral"
 MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
 MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
 TRANSCRIPTION_TIMEOUT = 45    # Seconds before giving up on a Whisper transcription
+NOTIFICATIONS_PATH = "data/notifications.jsonl"
 
 # --- Whisper Speech-to-Text ---
 # Windows CPU fallback: use "small" for responsiveness or "medium" for accuracy.
