@@ -20,7 +20,9 @@ Usage:
 """
 
 import sys
+import itertools
 import threading
+import time
 
 from voice.listener import record_audio, get_audio_devices, calibrate_silence
 from voice.transcriber import load_model, transcribe_audio
@@ -107,6 +109,7 @@ except Exception:
     _free_conversation.set()       # Default to ON if config missing
 
 _voice_turn_active = threading.Event()
+_turn_counter = itertools.count(1)
 
 
 def _conversation_voice_provider() -> str | None:
@@ -319,6 +322,19 @@ def announce_reminder(text: str) -> None:
     speak_conversation(text)
 
 
+def _new_turn_id() -> str:
+    """Return a compact correlation ID for one voice turn."""
+    return f"turn-{next(_turn_counter):05d}"
+
+
+def _audio_sample_count(audio_data) -> int | str:
+    """Return a safe audio sample count for diagnostics."""
+    try:
+        return len(audio_data)
+    except Exception:
+        return "unknown"
+
+
 def voice_pipeline(device_index: int | None, avatar) -> None:
     """Run the voice pipeline loop in a background thread.
 
@@ -355,13 +371,35 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         set_idle()
                         continue
 
+                    turn_id = _new_turn_id()
+                    turn_started = time.perf_counter()
+                    log.info(
+                        "[%s] Voice turn started: mode=conversation free_conversation=%s audio_samples=%s",
+                        turn_id,
+                        is_free_conversation(),
+                        _audio_sample_count(audio_data),
+                    )
+
                     # Transcribe everything
                     _voice_turn_active.set()
                     try:
                         set_thinking()
+                        phase_started = time.perf_counter()
+                        log.info("[%s] Transcription starting.", turn_id)
                         text = transcribe_audio(audio_data)
+                        log.info(
+                            "[%s] Transcription finished: elapsed=%.2fs chars=%d",
+                            turn_id,
+                            time.perf_counter() - phase_started,
+                            len(text or ""),
+                        )
 
                         if not text:
+                            log.info(
+                                "[%s] Voice turn ended: no transcription total_elapsed=%.2fs",
+                                turn_id,
+                                time.perf_counter() - turn_started,
+                            )
                             set_idle()
                             continue
 
@@ -372,6 +410,11 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         )):
                             if not is_free_conversation():
                                 toggle_free_conversation()
+                            log.info(
+                                "[%s] Voice turn ended: conversation-mode command total_elapsed=%.2fs",
+                                turn_id,
+                                time.perf_counter() - turn_started,
+                            )
                             set_idle()
                             continue
 
@@ -380,11 +423,21 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         )):
                             if is_free_conversation():
                                 toggle_free_conversation()
+                            log.info(
+                                "[%s] Voice turn ended: conversation-mode command total_elapsed=%.2fs",
+                                turn_id,
+                                time.perf_counter() - turn_started,
+                            )
                             set_idle()
                             continue
 
                         # Name check — bypassed in free conversation mode
                         if not is_free_conversation() and not is_addressed_to_aria(text):
+                            log.info(
+                                "[%s] Voice turn ignored: name not detected total_elapsed=%.2fs",
+                                turn_id,
+                                time.perf_counter() - turn_started,
+                            )
                             set_idle()
                             continue
 
@@ -400,8 +453,15 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
 
                         # Think and respond
                         set_thinking()
-                        log.info("Thinking...")
+                        phase_started = time.perf_counter()
+                        log.info("[%s] Thinking...", turn_id)
                         response = think(text)
+                        log.info(
+                            "[%s] Reasoning finished: elapsed=%.2fs response_chars=%d",
+                            turn_id,
+                            time.perf_counter() - phase_started,
+                            len(response or ""),
+                        )
                         log.info("%s", response)
 
                         # Mirror to UI's Last Response panel before speaking
@@ -409,8 +469,24 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                             _ui.set_last_response(response)
 
                         # Speak (avatar state handled inside speak())
+                        phase_started = time.perf_counter()
+                        log.info("[%s] Speaking starting.", turn_id)
                         speak_conversation(response)
+                        log.info(
+                            "[%s] Speaking finished: elapsed=%.2fs total_elapsed=%.2fs",
+                            turn_id,
+                            time.perf_counter() - phase_started,
+                            time.perf_counter() - turn_started,
+                        )
                         set_idle()
+                    except Exception:
+                        log.error(
+                            "[%s] Voice turn failed: total_elapsed=%.2fs",
+                            turn_id,
+                            time.perf_counter() - turn_started,
+                            exc_info=True,
+                        )
+                        raise
                     finally:
                         _voice_turn_active.clear()
 
@@ -437,17 +513,54 @@ def voice_pipeline(device_index: int | None, avatar) -> None:
                         set_dormant()
                         continue
 
+                    turn_id = _new_turn_id()
+                    turn_started = time.perf_counter()
+                    log.info(
+                        "[%s] Voice turn started: mode=sleep-wake audio_samples=%s",
+                        turn_id,
+                        _audio_sample_count(audio_data),
+                    )
+
                     set_thinking()
+                    phase_started = time.perf_counter()
+                    log.info("[%s] Transcription starting.", turn_id)
                     text = transcribe_audio(audio_data)
+                    log.info(
+                        "[%s] Transcription finished: elapsed=%.2fs chars=%d",
+                        turn_id,
+                        time.perf_counter() - phase_started,
+                        len(text or ""),
+                    )
 
                     if text:
                         chan_log.info("%s", text)
-                        log.info("Thinking...")
+                        phase_started = time.perf_counter()
+                        log.info("[%s] Thinking...", turn_id)
                         response = think(text)
+                        log.info(
+                            "[%s] Reasoning finished: elapsed=%.2fs response_chars=%d",
+                            turn_id,
+                            time.perf_counter() - phase_started,
+                            len(response or ""),
+                        )
                         log.info("%s", response)
                         if _ui is not None and response:
                             _ui.set_last_response(response)
+                        phase_started = time.perf_counter()
+                        log.info("[%s] Speaking starting.", turn_id)
                         speak_conversation(response)
+                        log.info(
+                            "[%s] Speaking finished: elapsed=%.2fs total_elapsed=%.2fs",
+                            turn_id,
+                            time.perf_counter() - phase_started,
+                            time.perf_counter() - turn_started,
+                        )
+                    else:
+                        log.info(
+                            "[%s] Voice turn ended: no transcription total_elapsed=%.2fs",
+                            turn_id,
+                            time.perf_counter() - turn_started,
+                        )
 
                     # Return to sleep after answering
                     set_dormant()

@@ -33,9 +33,12 @@ Design split:
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote as urlquote, urlencode
+from urllib.request import Request, urlopen
 
 from core.logger import get_logger
 
@@ -47,8 +50,47 @@ DEFAULT_TICKERS              = ["AAPL", "MSFT", "NVDA", "TSLA"]
 DEFAULT_VOLUME_SPIKE_PCT     = 30.0   # flag if today's volume > 30-day avg + 30%
 DEFAULT_VOLATILITY_SIGMA     = 2.0    # flag if today's return > 2σ of last 30 days
 DEFAULT_HISTORY_DAYS         = 60     # request 60 calendar days to safely cover 30 trading days
+DEFAULT_MARKET_DATA_TIMEOUT  = 8.0    # seconds; prevents voice turns hanging on yfinance
+DEFAULT_QUOTE_TIMEOUT        = 3.0    # seconds; live voice quote path must stay responsive
 
 SNAPSHOT_DIR = Path("data/market")
+
+TICKER_STOPWORDS = {
+    "A", "AN", "AND", "ARE", "AT", "CHAN", "CURRENT", "DID", "END",
+    "ENDED", "FOR", "GET", "GIVE", "HOW", "IN", "IS", "LAST", "LATEST", "ME",
+    "MY", "NOW", "OF", "ON", "PLEASE", "PRICE", "QUOTE", "SHARE", "STOCK",
+    "THE", "THIS", "TODAY", "WHAT", "WHATS", "WITH", "S", "P",
+    "HAS", "IT", "ITS", "MONTH", "MONTHS", "OVER", "PAST", "PERFORMANCE",
+    "PERFORMED", "RECENT", "SIX", "YEAR", "YEARS",
+}
+
+COMPANY_TICKER_ALIASES = {
+    "ALPHABET": "GOOGL",
+    "APPLE": "AAPL",
+    "GAMESTOP": "GME",
+    "GOOGLE": "GOOGL",
+    "META": "META",
+    "MICROSOFT": "MSFT",
+    "NVIDIA": "NVDA",
+    "TESLA": "TSLA",
+}
+
+INDEX_ALIAS_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\bS\s*(?:&|AND)\s*P\s*500\b", "^GSPC"),
+    (r"\bSP\s*500\b", "^GSPC"),
+    (r"\bNASDAQ\s*100\b", "^NDX"),
+    (r"\bNASDAQ\b", "^IXIC"),
+    (r"\bDOW\s+JONES\b", "^DJI"),
+    (r"\bFTSE\s*100\b", "^FTSE"),
+)
+
+SYMBOL_DISPLAY_NAMES = {
+    "^GSPC": "S&P 500",
+    "^NDX": "Nasdaq 100",
+    "^IXIC": "Nasdaq Composite",
+    "^DJI": "Dow Jones",
+    "^FTSE": "FTSE 100",
+}
 
 
 def _load_config() -> dict:
@@ -63,13 +105,165 @@ def _load_config() -> dict:
             "tickers":          getattr(config, "MARKET_TICKERS", DEFAULT_TICKERS),
             "volume_spike_pct": getattr(config, "MARKET_VOLUME_SPIKE_PCT", DEFAULT_VOLUME_SPIKE_PCT),
             "volatility_sigma": getattr(config, "MARKET_VOLATILITY_SIGMA", DEFAULT_VOLATILITY_SIGMA),
+            "timeout_seconds":  getattr(config, "MARKET_DATA_TIMEOUT_SECONDS", DEFAULT_MARKET_DATA_TIMEOUT),
+            "quote_timeout_seconds": getattr(config, "MARKET_QUOTE_TIMEOUT_SECONDS", DEFAULT_QUOTE_TIMEOUT),
         }
     except ImportError:
         return {
             "tickers":          DEFAULT_TICKERS,
             "volume_spike_pct": DEFAULT_VOLUME_SPIKE_PCT,
             "volatility_sigma": DEFAULT_VOLATILITY_SIGMA,
+            "timeout_seconds":  DEFAULT_MARKET_DATA_TIMEOUT,
+            "quote_timeout_seconds": DEFAULT_QUOTE_TIMEOUT,
         }
+
+
+# ── Quote request helpers ────────────────────────────────────────────────────
+
+def normalize_ticker_symbol(ticker: str) -> str:
+    """Validate and normalize a ticker symbol for yfinance.
+
+    Args:
+        ticker: User-provided ticker, optionally prefixed with '$'.
+
+    Returns:
+        Uppercase ticker symbol.
+
+    Raises:
+        ValueError: If the ticker is empty or malformed.
+    """
+    symbol = ticker.strip().upper().lstrip("$").replace(" ", "")
+    if not re.fullmatch(r"\^?[A-Z0-9]{1,6}(?:[.-][A-Z]{1,2})?", symbol):
+        raise ValueError(f"Invalid ticker symbol: {ticker!r}")
+    return symbol
+
+
+def display_name_for_symbol(symbol: str) -> str:
+    """Return a speech-friendly name for a ticker or index symbol."""
+    normalized = normalize_ticker_symbol(symbol)
+    return SYMBOL_DISPLAY_NAMES.get(normalized, normalized)
+
+
+def extract_ticker_symbol(text: str) -> str | None:
+    """Extract the most likely stock ticker from a voice query.
+
+    The heuristic intentionally favours explicit ticker tokens over broad
+    finance words so "latest stock price for GME" resolves to GME, not STOCK.
+
+    Args:
+        text: Original transcribed user request.
+
+    Returns:
+        Normalized ticker symbol, or None if no credible candidate exists.
+    """
+    upper = text.upper()
+
+    for pattern, ticker in INDEX_ALIAS_PATTERNS:
+        if re.search(pattern, upper):
+            return ticker
+
+    for company, ticker in COMPANY_TICKER_ALIASES.items():
+        if re.search(rf"\b{re.escape(company)}\b", upper):
+            return ticker
+
+    cashtag = re.search(r"\$([A-Z]{1,5}(?:[.-][A-Z]{1,2})?)\b", upper)
+    if cashtag:
+        return normalize_ticker_symbol(cashtag.group(1))
+
+    preferred = re.findall(
+        r"\b(?:FOR|OF|ON|QUOTE|PRICE|STOCK|TICKER)\s+(?:THE\s+)?([A-Z]{1,5}(?:[.-][A-Z]{1,2})?)\b",
+        upper,
+    )
+    candidates = preferred + re.findall(r"\b([A-Z]{1,5}(?:[.-][A-Z]{1,2})?)\b", upper)
+
+    for candidate in candidates:
+        symbol = normalize_ticker_symbol(candidate)
+        if symbol not in TICKER_STOPWORDS:
+            return symbol
+    return None
+
+
+def _format_quote_date(value) -> str | None:
+    """Return a human-readable date for the latest quote row."""
+    if value is None:
+        return None
+    try:
+        return value.strftime("%A %d %B %Y")
+    except AttributeError:
+        return str(value)
+
+
+def _format_price(price: float | int | None, symbol: str = "") -> str:
+    """Format a price for speech."""
+    if price is None:
+        return "unknown"
+    if symbol.startswith("^"):
+        return f"{float(price):,.2f}"
+    return f"${float(price):,.2f}"
+
+
+def _build_quote_summary(quote: dict[str, Any]) -> str:
+    """Build a short spoken response for a single ticker quote."""
+    ticker = quote.get("ticker", "that ticker")
+    display_name = quote.get("display_name") or ticker
+    error = quote.get("error")
+    if error:
+        return f"I couldn't get a quote for {display_name}, Chan."
+
+    price = quote.get("price")
+    if price is None:
+        return f"I couldn't find a usable price for {display_name}, Chan."
+
+    as_of = quote.get("as_of_date")
+    change_pct = quote.get("daily_change_pct")
+    previous_close = quote.get("previous_close")
+
+    date_part = f" on {as_of}" if as_of else ""
+    base = f"{display_name} last closed at {_format_price(price, ticker)}{date_part}"
+
+    if change_pct is None or previous_close is None:
+        return f"{base}, Chan."
+
+    if change_pct == 0:
+        return f"{base}, flat from the previous close."
+
+    direction = "up" if change_pct > 0 else "down"
+    return (
+        f"{base}, {direction} {abs(change_pct):.1f}% from the previous close "
+        f"of {_format_price(previous_close, ticker)}."
+    )
+
+
+def _quote_from_rows(ticker: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a quote dict from lightweight Yahoo chart rows."""
+    usable = [row for row in rows if row.get("close") is not None]
+    if not usable:
+        return {"ticker": ticker, "error": "no usable close data"}
+
+    latest = usable[-1]
+    previous = usable[-2] if len(usable) >= 2 else None
+
+    price = round(float(latest["close"]), 2)
+    previous_close = round(float(previous["close"]), 2) if previous else None
+    daily_change_pct = None
+    if previous_close:
+        daily_change_pct = round(((price - previous_close) / previous_close) * 100.0, 2)
+
+    timestamp = latest.get("timestamp")
+    as_of = None
+    if timestamp is not None:
+        as_of = datetime.fromtimestamp(int(timestamp)).strftime("%A %d %B %Y")
+
+    return {
+        "ticker": ticker,
+        "display_name": display_name_for_symbol(ticker),
+        "price": price,
+        "previous_close": previous_close,
+        "daily_change_pct": daily_change_pct,
+        "as_of_date": as_of,
+        "data_points": len(usable),
+        "source": "yahoo-chart",
+    }
 
 
 # ── Pure indicator math (network-free) ────────────────────────────────────────
@@ -457,6 +651,119 @@ class MarketAnalyst:
             snapshot = self.fetch_snapshot()
         return _build_summary(snapshot, short=short)
 
+    def fetch_quote(self, ticker: str) -> dict[str, Any]:
+        """Fetch the latest daily quote for a single ticker.
+
+        This is intentionally separate from fetch_snapshot(): a user asking
+        "what is GME's price?" needs one quick answer, not a configured market
+        basket summary.
+
+        Args:
+            ticker: Stock ticker symbol.
+
+        Returns:
+            Quote dict with ticker, price, previous_close, daily_change_pct,
+            as_of_date, and optional error.
+        """
+        try:
+            symbol = normalize_ticker_symbol(ticker)
+        except ValueError as e:
+            return {"ticker": ticker.strip().upper() or "UNKNOWN", "error": str(e)}
+
+        try:
+            rows = self._fetch_quote_rows(symbol)
+            if not rows:
+                log.warning("Quote %s: no data returned from Yahoo chart API.", symbol)
+                return {"ticker": symbol, "error": "no data returned"}
+
+            quote = _quote_from_rows(symbol, rows)
+            log.info(
+                "Quote %s: latest close %s, daily change %s%%",
+                symbol,
+                quote.get("price"),
+                quote.get("daily_change_pct"),
+            )
+            return quote
+        except Exception as e:
+            log.error("Quote %s fetch failed: %s", symbol, e)
+            return {"ticker": symbol, "error": str(e)}
+
+    def spoken_quote(self, ticker: str) -> str:
+        """Return a short spoken quote summary for one ticker."""
+        return _build_quote_summary(self.fetch_quote(ticker))
+
+    def fetch_performance(self, ticker: str, range_: str = "6mo") -> dict[str, Any]:
+        """Fetch lightweight price performance for one ticker or index."""
+        try:
+            symbol = normalize_ticker_symbol(ticker)
+        except ValueError as e:
+            return {"ticker": ticker.strip().upper() or "UNKNOWN", "error": str(e)}
+
+        try:
+            rows = self._fetch_chart_rows(symbol, range_=range_, interval="1d")
+            usable = [row for row in rows if row.get("close") is not None]
+            if len(usable) < 2:
+                return {
+                    "ticker": symbol,
+                    "display_name": display_name_for_symbol(symbol),
+                    "error": "not enough data returned",
+                }
+
+            start = usable[0]
+            end = usable[-1]
+            start_price = round(float(start["close"]), 2)
+            end_price = round(float(end["close"]), 2)
+            change_pct = round(((end_price - start_price) / start_price) * 100.0, 2)
+
+            return {
+                "ticker": symbol,
+                "display_name": display_name_for_symbol(symbol),
+                "start_price": start_price,
+                "end_price": end_price,
+                "change_pct": change_pct,
+                "start_date": _format_quote_date(
+                    datetime.fromtimestamp(int(start["timestamp"]))
+                    if start.get("timestamp") is not None
+                    else None
+                ),
+                "end_date": _format_quote_date(
+                    datetime.fromtimestamp(int(end["timestamp"]))
+                    if end.get("timestamp") is not None
+                    else None
+                ),
+                "data_points": len(usable),
+                "source": "yahoo-chart",
+            }
+        except Exception as e:
+            log.error("Performance %s fetch failed: %s", symbol, e)
+            return {
+                "ticker": symbol,
+                "display_name": display_name_for_symbol(symbol),
+                "error": str(e),
+            }
+
+    def spoken_performance(self, ticker: str, period_label: str = "six months", range_: str = "6mo") -> str:
+        """Return a short spoken performance summary for one ticker or index."""
+        data = self.fetch_performance(ticker, range_=range_)
+        display_name = data.get("display_name") or data.get("ticker", "that instrument")
+        if data.get("error"):
+            return f"I couldn't get {period_label} performance for {display_name}, Chan."
+
+        change_pct = data.get("change_pct")
+        end_price = data.get("end_price")
+        start_price = data.get("start_price")
+        end_date = data.get("end_date")
+        if change_pct is None or end_price is None or start_price is None:
+            return f"I couldn't get enough data for {display_name}, Chan."
+
+        direction = "up" if change_pct >= 0 else "down"
+        date_part = f" to {end_date}" if end_date else ""
+        return (
+            f"Over the last {period_label}, {display_name} is {direction} "
+            f"{abs(change_pct):.1f}%, moving from {_format_price(start_price, data.get('ticker', ''))} "
+            f"to {_format_price(end_price, data.get('ticker', ''))}{date_part}."
+        )
+
     def save_snapshot(self, snapshot: dict) -> Path:
         """Persist a snapshot to data/market/YYYY-MM-DD.json.
 
@@ -500,8 +807,65 @@ class MarketAnalyst:
             sorted ascending by date. None on hard failure.
         """
         import yfinance as yf
+        timeout = float(self.config.get("timeout_seconds", DEFAULT_MARKET_DATA_TIMEOUT))
         # auto_adjust=True applies splits + dividends so price math is consistent.
-        df = yf.Ticker(ticker).history(period=f"{DEFAULT_HISTORY_DAYS}d", auto_adjust=True)
+        log.info("Ticker %s: requesting %dd daily history via yfinance (timeout %.1fs).", ticker, DEFAULT_HISTORY_DAYS, timeout)
+        df = yf.Ticker(ticker).history(
+            period=f"{DEFAULT_HISTORY_DAYS}d",
+            auto_adjust=True,
+            timeout=timeout,
+        )
         if df is None or df.empty:
             return None
+        log.info("Ticker %s: yfinance returned %d row(s).", ticker, len(df))
         return df
+
+    def _fetch_quote_rows(self, ticker: str) -> list[dict[str, Any]]:
+        """Fetch short daily quote rows using only Python's stdlib.
+
+        Avoids yfinance, pandas, and httpx in the voice path. Those are fine for
+        batch analysis/tests, but voice turns need the smallest possible
+        dependency surface and a tight timeout.
+        """
+        return self._fetch_chart_rows(ticker, range_="5d", interval="1d")
+
+    def _fetch_chart_rows(self, ticker: str, range_: str, interval: str) -> list[dict[str, Any]]:
+        """Fetch daily chart rows using only Python's stdlib."""
+        timeout = float(self.config.get("quote_timeout_seconds", DEFAULT_QUOTE_TIMEOUT))
+        query = urlencode({"range": range_, "interval": interval})
+        url_ticker = urlquote(ticker, safe="")
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{url_ticker}?{query}"
+        log.info(
+            "Quote %s: requesting %s %s history via Yahoo chart API (timeout %.1fs).",
+            ticker,
+            range_,
+            interval,
+            timeout,
+        )
+
+        request = Request(
+            url,
+            headers={"User-Agent": "Aria/1.0", "Accept": "application/json"},
+        )
+        with urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        result = (payload.get("chart", {}).get("result") or [None])[0]
+        if not result:
+            return []
+
+        timestamps = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or [0] * len(closes)
+
+        if not timestamps or not closes:
+            return []
+
+        rows = [
+            {"timestamp": timestamp, "close": close, "volume": volume}
+            for timestamp, close, volume in zip(timestamps, closes, volumes)
+            if close is not None
+        ]
+        log.info("Quote %s: Yahoo chart API returned %d row(s).", ticker, len(rows))
+        return rows

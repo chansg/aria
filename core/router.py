@@ -77,6 +77,25 @@ INTENT_MAP: dict[str, dict] = {
             "full market update", "detailed market", "market details",
         ],
     },
+    "stock_quote": {
+        "tier": 1,
+        "keywords": [
+            "stock price", "share price", "ticker price", "latest price",
+            "current price", "price for", "price of", "quote for",
+            "quote on", "stock quote", "last close", "last closed",
+            "closed at", "last end", "last ended",
+        ],
+    },
+    "finance_followup": {
+        "tier": 1,
+        "keywords": [
+            "is this recent", "is that recent", "how recent", "when was this",
+            "when was that", "as of when", "is this live", "is that live",
+            "what about", "how about", "last six months", "past six months",
+            "six months", "last month", "past month", "last year",
+            "performance", "performed",
+        ],
+    },
     "notifications": {
         "tier": 1,
         "keywords": [
@@ -85,6 +104,17 @@ INTENT_MAP: dict[str, dict] = {
             "anything worth flagging", "anything to flag",
             "show insights", "read insights", "clear insights",
             "clear notifications", "mark insights read",
+        ],
+    },
+    "broker_account": {
+        "tier": 1,
+        "keywords": [
+            "trading 212", "trading212", "paper account", "practice account",
+            "demo account", "broker account", "broker summary",
+            "account cash", "cash balance", "available cash",
+            "open positions", "demo positions", "paper positions",
+            "pending orders", "open orders", "paper portfolio",
+            "demo portfolio",
         ],
     },
 
@@ -163,6 +193,16 @@ def classify(text: str) -> dict:
     # Check Tier 1 first
     for intent_name, config in INTENT_MAP.items():
         if config["tier"] == 1:
+            if intent_name == "stock_quote":
+                if _matches_stock_quote(text, text_lower, config["keywords"]):
+                    log.info("Tier 1 matched: %s — handling locally.", intent_name)
+                    return {"intent": intent_name, "tier": 1}
+                continue
+            if intent_name == "finance_followup":
+                if _matches_finance_followup(text, text_lower, config["keywords"]):
+                    log.info("Tier 1 matched: %s — handling locally.", intent_name)
+                    return {"intent": intent_name, "tier": 1}
+                continue
             if _matches(text_lower, config["keywords"]):
                 log.info("Tier 1 matched: %s — handling locally.", intent_name)
                 return {"intent": intent_name, "tier": 1}
@@ -191,6 +231,61 @@ def _matches(text: str, keywords: list[str]) -> bool:
         True if any keyword is found in the text.
     """
     return any(kw in text for kw in keywords)
+
+
+def _matches_stock_quote(text: str, text_lower: str, keywords: list[str]) -> bool:
+    """Match stock-quote wording without hijacking all price questions."""
+    if not _matches(text_lower, keywords):
+        return False
+
+    explicit_stock_words = (
+        "stock", "share", "ticker", "quote", "last close", "last closed",
+        "last end", "last ended", "closed at",
+    )
+    if any(word in text_lower for word in explicit_stock_words):
+        return True
+
+    try:
+        from core.market_analyst import extract_ticker_symbol
+        return extract_ticker_symbol(text) is not None
+    except Exception:
+        return False
+
+
+def _matches_finance_followup(text: str, text_lower: str, keywords: list[str]) -> bool:
+    """Match follow-ups only when recent finance context makes them safe."""
+    if not _matches(text_lower, keywords):
+        return False
+
+    try:
+        from core.conversation_state import has_recent_finance_context
+        if not has_recent_finance_context():
+            return False
+    except Exception:
+        return False
+
+    recency_phrases = (
+        "is this recent", "is that recent", "how recent", "when was this",
+        "when was that", "as of when", "is this live", "is that live",
+    )
+    if any(phrase in text_lower for phrase in recency_phrases):
+        return True
+
+    performance_phrases = (
+        "last six months", "past six months", "six months", "last month",
+        "past month", "last year", "performance", "performed",
+    )
+    if any(phrase in text_lower for phrase in performance_phrases):
+        return True
+
+    if "what about" in text_lower or "how about" in text_lower:
+        try:
+            from core.market_analyst import extract_ticker_symbol
+            return extract_ticker_symbol(text) is not None
+        except Exception:
+            return False
+
+    return False
 
 
 # ── Tier 1 local handlers ─────────────────────────────────────────────────────

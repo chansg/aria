@@ -23,7 +23,8 @@ OLLAMA_MODEL = "mistral"
 
 # --- Conversation / Prompt Limits ---
 MAX_CONVERSATION_TURNS = 10   # Recent exchanges sent as context to Claude
-MAX_SPEAK_LENGTH = 500        # Max characters per TTS utterance
+SPOKEN_RESPONSE_MAX_CHARS = 320  # Normal live replies are capped unless detail is requested
+MAX_SPEAK_LENGTH = 9999      # Legacy compatibility; speaker.py chunks by sentence
 TRANSCRIPTION_TIMEOUT = 45    # Seconds before giving up on a Whisper transcription
 NOTIFICATIONS_PATH = "data/notifications.jsonl"
 
@@ -98,3 +99,17 @@ MARKET_VOLUME_SPIKE_PCT = 30.0
 # Today's daily change in absolute % must exceed this many σ of the
 # 30-day return distribution to be flagged as a "large move".
 MARKET_VOLATILITY_SIGMA = 2.0
+# Hard timeout for yfinance calls so voice turns do not hang silently.
+MARKET_DATA_TIMEOUT_SECONDS = 8.0
+# Tighter timeout for single-stock voice quotes.
+MARKET_QUOTE_TIMEOUT_SECONDS = 3.0
+
+# ── Trading 212 Demo Broker Adapter ─────────────────────────────────────────
+# Phase 1 is read-only and demo-only. Do not point this at live.trading212.com.
+TRADING212_ENV = "demo"
+TRADING212_BASE_URL = "https://demo.trading212.com/api/v0"
+TRADING212_API_KEY = ""
+TRADING212_API_SECRET = ""
+TRADING212_TIMEOUT_SECONDS = 10.0
+TRADING212_AUDIT_LOG_PATH = "data/broker/trading212_audit.jsonl"
+TRADING212_TRAINING_LOG_PATH = "data/broker/trading212_account_state.jsonl"
