@@ -37,6 +37,9 @@ data/captures/
 # Market analyst — daily snapshots regenerated each fetch
 data/market/*.json
 
+# Broker integrations — private account snapshots and audit logs
+data/broker/
+
 # Large model files (re-download, don't commit)
 assets/models/*.onnx
 

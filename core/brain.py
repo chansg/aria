@@ -44,6 +44,7 @@ except ImportError:
 from core.router import classify, handle_time, handle_date, handle_calendar, handle_notifications
 from core.personality import get_system_prompt, record_interaction
 from core.memory import store_episodic, build_memory_context
+from core.conversation_state import get_last_finance_context, remember_finance_quote
 from core.scheduler import add_reminder, add_reminder_minutes, list_reminders, cancel_reminder
 from core.web_search import search_web
 from core.vision_analyzer import VisionAnalyzer
@@ -267,6 +268,65 @@ def _ensure_complete_sentence(text: str) -> str:
     return text
 
 
+def _spoken_response_max_chars() -> int:
+    """Read the live voice response cap from config.py."""
+    try:
+        import config
+        return int(getattr(config, "SPOKEN_RESPONSE_MAX_CHARS", 320))
+    except Exception:
+        return 320
+
+
+def _requests_detailed_response(user_input: str) -> bool:
+    """Return True when the user explicitly asks for a longer answer."""
+    lowered = user_input.lower()
+    detail_keywords = (
+        "detail", "detailed", "explain", "break down", "step by step",
+        "deep dive", "full answer", "long answer", "walk me through",
+        "analyse", "analyze", "review",
+    )
+    return any(keyword in lowered for keyword in detail_keywords)
+
+
+def _limit_spoken_response(response: str, user_input: str) -> str:
+    """Keep normal live conversation responses short enough for TTS.
+
+    Claude can produce useful but too-long prose for voice. This trims ordinary
+    conversation to complete sentences unless the user explicitly asked for a
+    detailed answer.
+    """
+    max_chars = _spoken_response_max_chars()
+    if max_chars <= 0 or _requests_detailed_response(user_input):
+        return response
+
+    text = response.strip()
+    if len(text) <= max_chars:
+        return text
+
+    sentences = re.findall(r"[^.!?]+[.!?]", text)
+    kept: list[str] = []
+    for sentence in sentences:
+        candidate = " ".join(kept + [sentence.strip()])
+        if len(candidate) <= max_chars:
+            kept.append(sentence.strip())
+        else:
+            break
+
+    if kept:
+        limited = " ".join(kept)
+    else:
+        words: list[str] = []
+        for word in text.split():
+            candidate = " ".join(words + [word])
+            if len(candidate) > max_chars - 1:
+                break
+            words.append(word)
+        limited = " ".join(words).rstrip(",;:") + "."
+
+    log.info("Voice response capped — %d chars -> %d chars.", len(text), len(limited))
+    return limited
+
+
 # ── Tool execution ────────────────────────────────────────────────────────────
 
 def _execute_tool(tool_name: str, tool_input: dict) -> str:
@@ -349,8 +409,14 @@ def think(user_input: str) -> str:
             response = _handle_analysis_toggle(user_input)
         elif intent == "market":
             response = _handle_market_query(user_input)
+        elif intent == "stock_quote":
+            response = _handle_stock_quote(user_input)
+        elif intent == "finance_followup":
+            response = _handle_finance_followup(user_input)
         elif intent == "notifications":
             response = handle_notifications(user_input)
+        elif intent == "broker_account":
+            response = _handle_broker_account(user_input)
         else:
             response = handle_time()  # fallback
 
@@ -450,6 +516,115 @@ def _handle_market_query(text: str) -> str:
         return "Sorry Chan, I couldn't fetch the market data right now."
 
 
+def _handle_stock_quote(text: str) -> str:
+    """Handle a single ticker quote query locally via yfinance."""
+    log.info("Stock quote query — extracting ticker")
+    try:
+        from core.market_analyst import MarketAnalyst, _build_quote_summary, extract_ticker_symbol
+
+        ticker = extract_ticker_symbol(text)
+        if not ticker:
+            return "Which ticker should I check, Chan?"
+
+        analyst = MarketAnalyst()
+        quote = analyst.fetch_quote(ticker)
+        remember_finance_quote(quote, user_text=text)
+        return _build_quote_summary(quote)
+    except Exception as e:
+        log.error("Stock quote query failed: %s", e, exc_info=True)
+        return "Sorry Chan, I couldn't fetch that stock quote right now."
+
+
+def _handle_finance_followup(text: str) -> str:
+    """Handle finance follow-ups using fast session state before Claude."""
+    log.info("Finance follow-up query — using session context")
+    try:
+        from core.market_analyst import MarketAnalyst, _build_quote_summary, extract_ticker_symbol
+
+        text_lower = text.lower()
+        context = get_last_finance_context()
+        ticker = extract_ticker_symbol(text)
+        analyst = MarketAnalyst()
+
+        recency_terms = (
+            "is this recent", "is that recent", "how recent", "when was this",
+            "when was that", "as of when", "is this live", "is that live",
+        )
+        if any(term in text_lower for term in recency_terms) and context:
+            recency = context.as_of_date or "the latest available market close"
+            display_name = context.display_name or context.symbol
+            return (
+                f"That {display_name} figure is from {recency}. "
+                "It's end-of-day close data, not real-time intraday pricing."
+            )
+
+        performance_terms = (
+            "last six months", "past six months", "six months",
+            "last month", "past month", "last year", "performance", "performed",
+        )
+        if any(term in text_lower for term in performance_terms):
+            target = ticker or (context.symbol if context else None)
+            if not target:
+                return "Which ticker should I check, Chan?"
+            period_label, range_ = _performance_period(text_lower)
+            return analyst.spoken_performance(target, period_label=period_label, range_=range_)
+
+        if ticker:
+            quote = analyst.fetch_quote(ticker)
+            remember_finance_quote(quote, user_text=text)
+            return _build_quote_summary(quote)
+
+        if context:
+            display_name = context.display_name or context.symbol
+            return f"We were discussing {display_name}, Chan. What would you like to check next?"
+
+        return "Which ticker should I check, Chan?"
+    except Exception as e:
+        log.error("Finance follow-up failed: %s", e, exc_info=True)
+        return "Sorry Chan, I couldn't handle that finance follow-up right now."
+
+
+def _performance_period(text_lower: str) -> tuple[str, str]:
+    """Map natural language performance windows to Yahoo chart ranges."""
+    if "last year" in text_lower or "past year" in text_lower:
+        return "year", "1y"
+    if "last month" in text_lower or "past month" in text_lower:
+        return "month", "1mo"
+    return "six months", "6mo"
+
+
+def _handle_broker_account(text: str) -> str:
+    """Handle read-only Trading 212 demo account questions."""
+    log.info("Broker account query — Trading 212 demo read-only")
+    try:
+        from core.brokers.trading212 import (
+            Trading212Client,
+            Trading212ConfigError,
+            Trading212Error,
+        )
+
+        text_lower = text.lower()
+        with Trading212Client.from_runtime() as client:
+            if any(kw in text_lower for kw in ("position", "portfolio")):
+                return client.spoken_positions_summary()
+            if any(kw in text_lower for kw in ("pending order", "open order", "orders")):
+                return client.spoken_pending_orders_summary()
+            return client.spoken_account_summary()
+
+    except Trading212ConfigError as e:
+        log.warning("Trading 212 config unavailable: %s", e)
+        return (
+            "Trading 212 demo is not configured yet, Chan. Add the demo API key "
+            "and secret to your environment first."
+        )
+    except Trading212Error as e:
+        log.error("Trading 212 query failed: %s", e, exc_info=True)
+        return "Sorry Chan, I couldn't reach the Trading 212 demo account right now."
+    except Exception as e:
+        log.error("Broker account query failed: %s", e, exc_info=True)
+        return "Sorry Chan, the broker account check failed."
+
+
 # ── Tier 2 handler ────────────────────────────────────────────────────────────
 
 def _handle_web_query(text: str, intent: str = "") -> str:
@@ -497,6 +672,7 @@ def _handle_web_query(text: str, intent: str = "") -> str:
         log.info("Gemini Tier 2 response — %d chars.", len(raw))
         mood, clean_response = _parse_mood_tag(raw)
         clean_response = _ensure_complete_sentence(clean_response)
+        clean_response = _limit_spoken_response(clean_response, text)
         _trigger_avatar_mood(mood)
         return clean_response
 
@@ -539,6 +715,7 @@ def _handle_vision(text: str) -> str:
     raw = analyzer.analyse_screen(context=text)
     mood, clean_response = _parse_mood_tag(raw)
     clean_response = _ensure_complete_sentence(clean_response)
+    clean_response = _limit_spoken_response(clean_response, text)
     _trigger_avatar_mood(mood)
     return clean_response
 
@@ -625,6 +802,7 @@ def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
         log.info("Ollama fallback response — %d chars.", len(raw))
         mood, clean_response = _parse_mood_tag(raw)
         clean_response = _ensure_complete_sentence(clean_response)
+        clean_response = _limit_spoken_response(clean_response, text)
         _trigger_avatar_mood(mood)
         return clean_response
     except Exception as e:
@@ -666,6 +844,12 @@ def _handle_claude(user_input: str) -> str:
         "\n\nIMPORTANT: Begin every response with a mood tag in square brackets. "
         "Choose from: [HAPPY] [NEUTRAL] [THINKING] [SURPRISED] [SAD]. "
         "Example: '[HAPPY] Of course, Chan! Here's what I found.'"
+    )
+    system_prompt += (
+        "\n\nVoice response policy: for ordinary live conversation, answer in "
+        "1 to 3 short sentences. Keep the spoken answer under "
+        f"{_spoken_response_max_chars()} characters unless Chan explicitly asks "
+        "for detail, analysis, or a step-by-step explanation."
     )
 
     try:
@@ -718,11 +902,13 @@ def _handle_claude(user_input: str) -> str:
 
             reply = _extract_text(final_response)
             mood, clean_response = _parse_mood_tag(reply)
+            clean_response = _limit_spoken_response(clean_response, user_input)
             _trigger_avatar_mood(mood)
             return clean_response
 
         reply = _extract_text(response)
         mood, clean_response = _parse_mood_tag(reply)
+        clean_response = _limit_spoken_response(clean_response, user_input)
         _trigger_avatar_mood(mood)
         return clean_response
 

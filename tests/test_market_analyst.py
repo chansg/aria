@@ -20,10 +20,13 @@ import pytest
 
 from core.market_analyst import (
     MarketAnalyst,
+    _build_quote_summary,
     _build_summary,
     _compute_indicators,
     _detect_anomalies,
     _format_ticker_sentence,
+    extract_ticker_symbol,
+    normalize_ticker_symbol,
 )
 
 
@@ -334,6 +337,61 @@ class TestFormatTickerSentence:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Single-ticker quote helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTickerQuoteHelpers:
+    """Ticker extraction and quote summaries for voice requests."""
+
+    def test_extracts_explicit_ticker_from_stock_price_request(self) -> None:
+        assert extract_ticker_symbol("give me the latest stock price for GME") == "GME"
+
+    def test_extracts_ticker_when_price_phrase_has_stopword(self) -> None:
+        assert extract_ticker_symbol("what price did GME last end with?") == "GME"
+
+    def test_extracts_company_alias(self) -> None:
+        assert extract_ticker_symbol("what is GameStop stock price?") == "GME"
+
+    def test_extracts_sp500_index_alias(self) -> None:
+        assert extract_ticker_symbol("What is the price of the S&P 500?") == "^GSPC"
+
+    def test_rejects_missing_ticker(self) -> None:
+        assert extract_ticker_symbol("what is the latest stock price?") is None
+
+    def test_normalize_ticker_accepts_class_suffix(self) -> None:
+        assert normalize_ticker_symbol("$brk-b") == "BRK-B"
+
+    def test_normalize_ticker_accepts_index_symbol(self) -> None:
+        assert normalize_ticker_symbol("^gspc") == "^GSPC"
+
+    def test_quote_summary_formats_last_close(self) -> None:
+        quote = {
+            "ticker": "GME",
+            "price": 22.5,
+            "previous_close": 20.0,
+            "daily_change_pct": 12.5,
+            "as_of_date": "Thursday 30 April 2026",
+        }
+        out = _build_quote_summary(quote)
+        assert "GME last closed at $22.50" in out
+        assert "up 12.5%" in out
+        assert "$20.00" in out
+
+    def test_quote_summary_formats_index_without_dollar_symbol(self) -> None:
+        quote = {
+            "ticker": "^GSPC",
+            "display_name": "S&P 500",
+            "price": 6120.5,
+            "previous_close": 6100.0,
+            "daily_change_pct": 0.34,
+            "as_of_date": "Monday 04 May 2026",
+        }
+        out = _build_quote_summary(quote)
+        assert "S&P 500 last closed at 6,120.50" in out
+        assert "$" not in out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MarketAnalyst end-to-end (with mocked network)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -416,3 +474,123 @@ class TestMarketAnalyst:
         out = analyst.spoken_summary()
         assert isinstance(out, str)
         assert len(out) > 0
+
+    def test_spoken_quote_uses_single_ticker_fetch(self, monkeypatch) -> None:
+        """Quote requests should fetch one ticker and return a short answer."""
+        analyst = MarketAnalyst()
+        monkeypatch.setattr(
+            analyst,
+            "_fetch_quote_rows",
+            lambda ticker: [
+                {"timestamp": 1777670400, "close": 20.0, "volume": 100},
+                {"timestamp": 1777756800, "close": 22.5, "volume": 200},
+            ],
+        )
+
+        out = analyst.spoken_quote("GME")
+
+        assert "GME last closed at $22.50" in out
+        assert "up 12.5%" in out
+
+    def test_fetch_quote_rows_uses_stdlib_chart_endpoint(self, monkeypatch) -> None:
+        """Single-ticker quote fetch should avoid yfinance/httpx/pandas in the voice path."""
+        import core.market_analyst as ma
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                payload = {
+                    "chart": {
+                        "result": [{
+                            "timestamp": [1777670400, 1777756800],
+                            "indicators": {
+                                "quote": [{
+                                    "close": [20.0, 22.5],
+                                    "volume": [100, 200],
+                                }]
+                            },
+                        }]
+                    }
+                }
+                import json
+                return json.dumps(payload).encode("utf-8")
+
+        calls = {}
+
+        def fake_urlopen(request, *, timeout):
+            calls["url"] = request.full_url
+            calls["timeout"] = timeout
+            return FakeResponse()
+
+        monkeypatch.setattr(ma, "urlopen", fake_urlopen)
+
+        analyst = MarketAnalyst()
+        rows = analyst._fetch_quote_rows("AAPL")
+
+        assert "/chart/AAPL" in calls["url"]
+        assert "range=5d" in calls["url"]
+        assert "interval=1d" in calls["url"]
+        assert calls["timeout"] == analyst.config["quote_timeout_seconds"]
+        assert rows == [
+            {"timestamp": 1777670400, "close": 20.0, "volume": 100},
+            {"timestamp": 1777756800, "close": 22.5, "volume": 200},
+        ]
+
+    def test_fetch_quote_rows_url_encodes_index_symbol(self, monkeypatch) -> None:
+        """Yahoo index symbols need URL escaping in the chart path."""
+        import core.market_analyst as ma
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                payload = {
+                    "chart": {
+                        "result": [{
+                            "timestamp": [1777756800],
+                            "indicators": {"quote": [{"close": [6120.5], "volume": [0]}]},
+                        }]
+                    }
+                }
+                import json
+                return json.dumps(payload).encode("utf-8")
+
+        calls = {}
+
+        def fake_urlopen(request, *, timeout):
+            calls["url"] = request.full_url
+            return FakeResponse()
+
+        monkeypatch.setattr(ma, "urlopen", fake_urlopen)
+
+        analyst = MarketAnalyst()
+        rows = analyst._fetch_quote_rows("^GSPC")
+
+        assert "/chart/%5EGSPC" in calls["url"]
+        assert rows == [{"timestamp": 1777756800, "close": 6120.5, "volume": 0}]
+
+    def test_spoken_performance_formats_six_month_change(self, monkeypatch) -> None:
+        analyst = MarketAnalyst()
+        monkeypatch.setattr(
+            analyst,
+            "_fetch_chart_rows",
+            lambda ticker, range_, interval: [
+                {"timestamp": 1762128000, "close": 100.0, "volume": 100},
+                {"timestamp": 1777756800, "close": 125.0, "volume": 200},
+            ],
+        )
+
+        out = analyst.spoken_performance("AAPL", period_label="six months", range_="6mo")
+
+        assert "AAPL is up 25.0%" in out
+        assert "$100.00" in out
+        assert "$125.00" in out

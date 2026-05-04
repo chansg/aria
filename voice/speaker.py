@@ -90,7 +90,16 @@ def _clean_for_speech(text: str) -> str:
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*[-*]\s+", "", text, flags=re.MULTILINE)
     text = text.replace("*", "").replace("#", "")
+    text = _normalise_pronunciation_tokens(text)
     text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _normalise_pronunciation_tokens(text: str) -> str:
+    """Rewrite short tokens that Kokoro tends to spell aloud."""
+    text = re.sub(r"(?i)\bmm\s*[—–-]\s*", "Mmm, ", text)
+    text = re.sub(r"(?i)\bmm\b", "Mmm", text)
+    text = re.sub(r"(?i)\bhmm\s*[—–-]\s*", "Hmm, ", text)
     return text
 
 

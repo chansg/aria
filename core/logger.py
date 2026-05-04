@@ -33,7 +33,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 LOG_DIR  = Path("logs")
-LOG_FILE = LOG_DIR / "aria.log"
+LOG_FILE = LOG_DIR / ("aria_test.log" if "pytest" in sys.modules else "aria.log")
 
 # Module-name → display-prefix mapping. Modules not listed get a default
 # prefix derived from the last dotted component (capitalized).
@@ -45,6 +45,7 @@ _PREFIX_MAP = {
     "core.screen_capture":    "Capture",
     "core.proactive_analyst": "Analyst",
     "core.market_analyst":    "Market",
+    "core.brokers.trading212": "T212",
     "core.diagnostics":       "Diagnostics",
     "core.memory":            "Memory",
     "core.personality":       "Personality",
