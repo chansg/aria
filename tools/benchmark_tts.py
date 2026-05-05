@@ -16,7 +16,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from voice.speaker import _normalise_provider_name, _provider_chain, _synthesize_with_fallback
+from voice.speaker import (
+    _clean_for_speech,
+    _mono_for_amplitude,
+    _normalise_playback,
+    _normalise_provider_name,
+    _provider_chain,
+    _synthesize_with_fallback,
+    _trim_edge_silence,
+)
 
 
 DEFAULT_TEXTS = (
@@ -27,14 +35,19 @@ DEFAULT_TEXTS = (
 
 
 def _run_once(text: str, provider: str | None) -> None:
+    text = _clean_for_speech(text)
     start = time.perf_counter()
     result, provider_name = _synthesize_with_fallback(text, preferred_name=provider)
     elapsed = time.perf_counter() - start
-    duration = len(result.samples.reshape(-1)) / result.sample_rate if result.sample_rate else 0
-    realtime_factor = elapsed / duration if duration else 0
+    playback = _normalise_playback(result.samples)
+    trimmed = _trim_edge_silence(playback, int(result.sample_rate))
+    duration = len(_mono_for_amplitude(playback)) / result.sample_rate if result.sample_rate else 0
+    trimmed_duration = len(_mono_for_amplitude(trimmed)) / result.sample_rate if result.sample_rate else 0
+    realtime_factor = elapsed / trimmed_duration if trimmed_duration else 0
     print(
         f"provider={provider_name} chars={len(text)} "
-        f"elapsed={elapsed:.2f}s audio={duration:.2f}s rtf={realtime_factor:.2f}"
+        f"elapsed={elapsed:.2f}s audio={duration:.2f}s "
+        f"trimmed_audio={trimmed_duration:.2f}s rtf={realtime_factor:.2f}"
     )
 
 

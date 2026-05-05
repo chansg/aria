@@ -373,9 +373,9 @@ class TestTickerQuoteHelpers:
             "as_of_date": "Thursday 30 April 2026",
         }
         out = _build_quote_summary(quote)
-        assert "GME last closed at $22.50" in out
+        assert "GME closed at $22.50" in out
         assert "up 12.5%" in out
-        assert "$20.00" in out
+        assert "$20.00" not in out
 
     def test_quote_summary_formats_index_without_dollar_symbol(self) -> None:
         quote = {
@@ -387,7 +387,7 @@ class TestTickerQuoteHelpers:
             "as_of_date": "Monday 04 May 2026",
         }
         out = _build_quote_summary(quote)
-        assert "S&P 500 last closed at 6,120.50" in out
+        assert "S&P 500 closed at 6,120.50" in out
         assert "$" not in out
 
 
@@ -489,7 +489,7 @@ class TestMarketAnalyst:
 
         out = analyst.spoken_quote("GME")
 
-        assert "GME last closed at $22.50" in out
+        assert "GME closed at $22.50" in out
         assert "up 12.5%" in out
 
     def test_fetch_quote_rows_uses_stdlib_chart_endpoint(self, monkeypatch) -> None:
@@ -591,6 +591,6 @@ class TestMarketAnalyst:
 
         out = analyst.spoken_performance("AAPL", period_label="six months", range_="6mo")
 
-        assert "AAPL is up 25.0%" in out
+        assert "AAPL is up 25.0% over six months" in out
         assert "$100.00" in out
         assert "$125.00" in out

@@ -61,6 +61,36 @@ def is_speaking() -> bool:
     return _speaking_event.is_set()
 
 
+def _tts_max_chunk_chars() -> int:
+    """Return configured max TTS chunk size."""
+    try:
+        value = int(getattr(config, "TTS_MAX_CHUNK_CHARS", 180))
+    except Exception:
+        value = 180
+    return max(80, value)
+
+
+def _tts_trim_silence_enabled() -> bool:
+    """Return True when edge-silence trimming is enabled."""
+    return bool(getattr(config, "TTS_TRIM_SILENCE", True))
+
+
+def _tts_silence_threshold() -> float:
+    """Return amplitude threshold for edge-silence trimming."""
+    try:
+        return max(0.0, float(getattr(config, "TTS_SILENCE_THRESHOLD", 0.005)))
+    except Exception:
+        return 0.005
+
+
+def _tts_silence_padding_ms() -> int:
+    """Return padding retained around non-silent audio."""
+    try:
+        return max(0, int(getattr(config, "TTS_SILENCE_PADDING_MS", 80)))
+    except Exception:
+        return 80
+
+
 def _load_provider(name: str) -> TTSProvider:
     provider_name = _normalise_provider_name(name)
     if provider_name in _provider_cache:
@@ -184,7 +214,7 @@ def speak(text: str, provider: str | None = None) -> None:
         return
 
     text = _clean_for_speech(text)
-    chunks = _split_into_sentences(text)
+    chunks = _split_into_sentences(text, max_chunk=_tts_max_chunk_chars())
     chain = _provider_chain(provider)
 
     if _speak_lock.locked():
@@ -253,12 +283,54 @@ def _normalise_playback(samples: np.ndarray) -> np.ndarray:
     return playback
 
 
+def _trim_edge_silence(
+    samples: np.ndarray,
+    sample_rate: int,
+    *,
+    threshold: float | None = None,
+    padding_ms: int | None = None,
+) -> np.ndarray:
+    """Trim leading/trailing low-amplitude audio while preserving short padding."""
+    if samples.size == 0 or sample_rate <= 0:
+        return samples
+
+    threshold = _tts_silence_threshold() if threshold is None else threshold
+    padding_ms = _tts_silence_padding_ms() if padding_ms is None else padding_ms
+
+    mono = _mono_for_amplitude(samples)
+    active = np.flatnonzero(np.abs(mono) > threshold)
+    if active.size == 0:
+        return samples
+
+    padding = int(sample_rate * (padding_ms / 1000.0))
+    start = max(0, int(active[0]) - padding)
+    end = min(len(mono), int(active[-1]) + padding + 1)
+
+    if start == 0 and end == len(mono):
+        return samples
+    return samples[start:end] if samples.ndim == 1 else samples[start:end, :]
+
+
 def _play_audio(result: TTSResult, provider_name: str) -> None:
     """Play normalised float32 audio and feed amplitude to the visual facade."""
     audio_playback = _normalise_playback(result.samples)
-    audio_mono = _mono_for_amplitude(audio_playback)
     sample_rate = int(result.sample_rate)
+    original_mono = _mono_for_amplitude(audio_playback)
+    original_duration = len(original_mono) / sample_rate if sample_rate else 0
+
+    if _tts_trim_silence_enabled():
+        audio_playback = _trim_edge_silence(audio_playback, sample_rate)
+
+    audio_mono = _mono_for_amplitude(audio_playback)
     duration = len(audio_mono) / sample_rate if sample_rate else 0
+
+    if duration < original_duration:
+        log.debug(
+            "Trimmed TTS edge silence: provider=%s before=%.2fs after=%.2fs",
+            provider_name,
+            original_duration,
+            duration,
+        )
 
     log.debug("Playing TTS audio: provider=%s duration=%.2fs sample_rate=%s", provider_name, duration, sample_rate)
     sd.play(audio_playback, samplerate=sample_rate)

@@ -107,6 +107,39 @@ provider=kokoro-onnx ...
 Warm short replies should synthesize in roughly `0.5s` on the RTX 4070. If warm
 short replies are taking many seconds, verify the model path and ONNX provider.
 
+## Latency Controls
+
+Aria's voice latency has two separate parts:
+
+- synthesis time: how long Kokoro takes to generate audio
+- playback time: how long the generated audio takes to speak
+
+The Apple quote test showed synthesis was fast, while playback dominated the
+turn. Keep local voice responses compact and tune playback with:
+
+```python
+KOKORO_SPEED = 1.12
+TTS_MAX_CHUNK_CHARS = 180
+TTS_TRIM_SILENCE = True
+TTS_SILENCE_THRESHOLD = 0.005
+TTS_SILENCE_PADDING_MS = 80
+```
+
+`TTS_TRIM_SILENCE` removes leading/trailing low-amplitude audio from each TTS
+chunk before playback. It does not remove intentional pauses inside a sentence.
+If words sound clipped, lower `TTS_SILENCE_THRESHOLD` or increase
+`TTS_SILENCE_PADDING_MS`.
+
+Finance responses should stay short by design. For example, quote responses use
+compact wording such as:
+
+```text
+AAPL closed at $277.85, down 0.8%.
+```
+
+The quote date is preserved in session state, so a follow-up like "is this
+recent?" can answer the timestamp without making every quote response long.
+
 ## Manual Conversation Smoke Test
 
 Run Aria:

@@ -554,8 +554,8 @@ def _handle_finance_followup(text: str) -> str:
             recency = context.as_of_date or "the latest available market close"
             display_name = context.display_name or context.symbol
             return (
-                f"That {display_name} figure is from {recency}. "
-                "It's end-of-day close data, not real-time intraday pricing."
+                f"That {display_name} quote is from {recency} close, "
+                "not live intraday."
             )
 
         performance_terms = (
