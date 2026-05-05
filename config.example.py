@@ -68,6 +68,10 @@ TTS_PROVIDER = "kokoro"       # "kokoro" | "kokoro-onnx" | "piper"
 TTS_CONVERSATION_PROVIDER = "kokoro"
 TTS_FALLBACK_PROVIDER = ""
 TTS_FAIL_LOUD = True
+TTS_MAX_CHUNK_CHARS = 180
+TTS_TRIM_SILENCE = True
+TTS_SILENCE_THRESHOLD = 0.005
+TTS_SILENCE_PADDING_MS = 80
 
 # Kokoro ONNX assets:
 #   https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0
@@ -78,7 +82,7 @@ KOKORO_ONNX_PROVIDER = "CUDAExecutionProvider"
 KOKORO_DISABLE_PROVIDER_FALLBACK = True
 KOKORO_VOICE = "af_heart"
 KOKORO_LANG = "en-us"
-KOKORO_SPEED = 1.0
+KOKORO_SPEED = 1.12
 
 # Stage 3b should surface proactive insights as notifications. Keep spontaneous
 # speech off for now so analyst output cannot interrupt live conversation.

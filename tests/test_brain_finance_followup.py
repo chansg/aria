@@ -26,7 +26,7 @@ def test_finance_recency_followup_uses_session_context() -> None:
 
     assert "AAPL" in response
     assert "Monday 04 May 2026" in response
-    assert "not real-time intraday" in response
+    assert "not live intraday" in response
 
 
 def test_finance_symbol_followup_fetches_new_quote(monkeypatch) -> None:
@@ -54,7 +54,7 @@ def test_finance_symbol_followup_fetches_new_quote(monkeypatch) -> None:
 
     response = brain._handle_finance_followup("What about Nvidia?")
 
-    assert "NVDA last closed at $900.00" in response
+    assert "NVDA closed at $900.00" in response
     assert "up 5.9%" in response
 
 

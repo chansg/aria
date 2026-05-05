@@ -214,12 +214,10 @@ def _build_quote_summary(quote: dict[str, Any]) -> str:
     if price is None:
         return f"I couldn't find a usable price for {display_name}, Chan."
 
-    as_of = quote.get("as_of_date")
     change_pct = quote.get("daily_change_pct")
     previous_close = quote.get("previous_close")
 
-    date_part = f" on {as_of}" if as_of else ""
-    base = f"{display_name} last closed at {_format_price(price, ticker)}{date_part}"
+    base = f"{display_name} closed at {_format_price(price, ticker)}"
 
     if change_pct is None or previous_close is None:
         return f"{base}, Chan."
@@ -228,10 +226,7 @@ def _build_quote_summary(quote: dict[str, Any]) -> str:
         return f"{base}, flat from the previous close."
 
     direction = "up" if change_pct > 0 else "down"
-    return (
-        f"{base}, {direction} {abs(change_pct):.1f}% from the previous close "
-        f"of {_format_price(previous_close, ticker)}."
-    )
+    return f"{base}, {direction} {abs(change_pct):.1f}%."
 
 
 def _quote_from_rows(ticker: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -752,16 +747,14 @@ class MarketAnalyst:
         change_pct = data.get("change_pct")
         end_price = data.get("end_price")
         start_price = data.get("start_price")
-        end_date = data.get("end_date")
         if change_pct is None or end_price is None or start_price is None:
             return f"I couldn't get enough data for {display_name}, Chan."
 
         direction = "up" if change_pct >= 0 else "down"
-        date_part = f" to {end_date}" if end_date else ""
         return (
-            f"Over the last {period_label}, {display_name} is {direction} "
-            f"{abs(change_pct):.1f}%, moving from {_format_price(start_price, data.get('ticker', ''))} "
-            f"to {_format_price(end_price, data.get('ticker', ''))}{date_part}."
+            f"{display_name} is {direction} {abs(change_pct):.1f}% over {period_label}, "
+            f"from {_format_price(start_price, data.get('ticker', ''))} "
+            f"to {_format_price(end_price, data.get('ticker', ''))}."
         )
 
     def save_snapshot(self, snapshot: dict) -> Path:
