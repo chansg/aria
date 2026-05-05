@@ -169,6 +169,19 @@ INTENT_MAP: dict[str, dict] = {
     },
 }
 
+EXPLICIT_VISION_REFERENCES = (
+    "my screen",
+    "the screen",
+    "on screen",
+    "on my monitor",
+    "my monitor",
+    "as you can see",
+    "you can see from",
+    "you can see on",
+    "what i'm looking at",
+    "what i am looking at",
+)
+
 
 # ── Classification ────────────────────────────────────────────────────────────
 
@@ -189,6 +202,10 @@ def classify(text: str) -> dict:
             tier (int): 1, 2, or 3.
     """
     text_lower = text.lower().strip()
+
+    if _matches_explicit_vision_reference(text_lower):
+        log.info("Tier 2 matched: vision — explicit screen reference.")
+        return {"intent": "vision", "tier": 2}
 
     # Check Tier 1 first
     for intent_name, config in INTENT_MAP.items():
@@ -231,6 +248,11 @@ def _matches(text: str, keywords: list[str]) -> bool:
         True if any keyword is found in the text.
     """
     return any(kw in text for kw in keywords)
+
+
+def _matches_explicit_vision_reference(text_lower: str) -> bool:
+    """Route explicit screen/monitor references to vision before generic text."""
+    return any(phrase in text_lower for phrase in EXPLICIT_VISION_REFERENCES)
 
 
 def _matches_stock_quote(text: str, text_lower: str, keywords: list[str]) -> bool:

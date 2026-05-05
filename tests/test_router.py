@@ -61,6 +61,22 @@ def test_paper_positions_route_locally() -> None:
     assert route == {"intent": "broker_account", "tier": 1}
 
 
+def test_explicit_screen_reference_routes_to_vision() -> None:
+    route = classify(
+        "I see on my screen right now that GameStop offers to buy eBay."
+    )
+
+    assert route == {"intent": "vision", "tier": 2}
+
+
+def test_as_you_can_see_routes_to_vision() -> None:
+    route = classify(
+        "That is a legitimate source right now on my screen, as you can see from Wall Street Journal."
+    )
+
+    assert route == {"intent": "vision", "tier": 2}
+
+
 def test_finance_recency_followup_requires_context() -> None:
     route = classify("is this recent?")
 
