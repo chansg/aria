@@ -77,6 +77,26 @@ def test_as_you_can_see_routes_to_vision() -> None:
     assert route == {"intent": "vision", "tier": 2}
 
 
+def test_finance_current_event_routes_to_web_search() -> None:
+    route = classify("How did Ryan Cohen's interview go today?")
+
+    assert route == {"intent": "web_search", "tier": 2}
+
+
+def test_finance_headline_routes_to_web_search() -> None:
+    route = classify(
+        "Is the Wall Street Journal reporting GameStop acquiring eBay today?"
+    )
+
+    assert route == {"intent": "web_search", "tier": 2}
+
+
+def test_generic_interview_today_stays_claude() -> None:
+    route = classify("How did my interview go today?")
+
+    assert route == {"intent": "claude", "tier": 3}
+
+
 def test_finance_recency_followup_requires_context() -> None:
     route = classify("is this recent?")
 
