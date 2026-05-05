@@ -204,9 +204,7 @@ class AriaUI:
         notice_style = "gold1" if notices else "dim white"
         t.add_row("Insights",    Text(str(notices), style=notice_style))
         if latest_text:
-            if len(latest_text) > 42:
-                latest_text = latest_text[:39].rstrip() + "..."
-            t.add_row("Latest", Text(latest_text, style="white"))
+            t.add_row("Latest", Text(latest_text, style="white", overflow="fold"))
         t.add_row("",            "")
         t.add_row("Visual",      Text(avatar_status, style="medium_purple"))
         t.add_row("Gemini",      Text(self._gemini_status, style="cornflower_blue"))
@@ -266,8 +264,8 @@ class AriaUI:
     def _build_layout(self) -> "Layout":
         layout = Layout()
         layout.split_column(
-            Layout(name="top", size=12),
-            Layout(name="log"),
+            Layout(name="top", ratio=3, minimum_size=14),
+            Layout(name="log", ratio=4, minimum_size=10),
         )
         layout["top"].split_row(
             Layout(name="status", ratio=1),
