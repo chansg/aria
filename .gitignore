@@ -40,6 +40,9 @@ data/market/*.json
 # Broker integrations — private account snapshots and audit logs
 data/broker/
 
+# Validation/session review reports — regenerated locally
+data/session_reviews/
+
 # Large model files (re-download, don't commit)
 assets/models/*.onnx
 
