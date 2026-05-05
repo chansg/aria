@@ -182,6 +182,62 @@ EXPLICIT_VISION_REFERENCES = (
     "what i am looking at",
 )
 
+FINANCE_CURRENT_EVENT_TERMS = (
+    "today",
+    "this morning",
+    "this afternoon",
+    "tonight",
+    "latest",
+    "recent",
+    "breaking",
+    "news",
+    "interview",
+    "reported",
+    "reporting",
+    "headline",
+    "article",
+)
+
+FINANCE_ENTITY_TERMS = (
+    "stock",
+    "stocks",
+    "share",
+    "shares",
+    "market",
+    "markets",
+    "ticker",
+    "price",
+    "earnings",
+    "acquiring",
+    "acquire",
+    "merger",
+    "buyout",
+    "wall street journal",
+    "wsj",
+    "cnbc",
+    "bloomberg",
+    "reuters",
+    "marketwatch",
+    "financial times",
+    "ryan cohen",
+    "gamestop",
+    "game stop",
+    "gme",
+    "apple",
+    "aapl",
+    "nvidia",
+    "nvda",
+    "tesla",
+    "tsla",
+    "microsoft",
+    "msft",
+    "ebay",
+    "s&p 500",
+    "sp 500",
+    "nasdaq",
+    "dow",
+)
+
 
 # ── Classification ────────────────────────────────────────────────────────────
 
@@ -224,6 +280,10 @@ def classify(text: str) -> dict:
                 log.info("Tier 1 matched: %s — handling locally.", intent_name)
                 return {"intent": intent_name, "tier": 1}
 
+    if _matches_finance_current_event(text_lower):
+        log.info("Tier 2 matched: web_search — finance/current-event context.")
+        return {"intent": "web_search", "tier": 2}
+
     # Then Tier 2
     for intent_name, config in INTENT_MAP.items():
         if config["tier"] == 2:
@@ -253,6 +313,17 @@ def _matches(text: str, keywords: list[str]) -> bool:
 def _matches_explicit_vision_reference(text_lower: str) -> bool:
     """Route explicit screen/monitor references to vision before generic text."""
     return any(phrase in text_lower for phrase in EXPLICIT_VISION_REFERENCES)
+
+
+def _matches_finance_current_event(text_lower: str) -> bool:
+    """Route market/company current-event questions to web context."""
+    has_current_event_cue = any(
+        phrase in text_lower for phrase in FINANCE_CURRENT_EVENT_TERMS
+    )
+    if not has_current_event_cue:
+        return False
+
+    return any(phrase in text_lower for phrase in FINANCE_ENTITY_TERMS)
 
 
 def _matches_stock_quote(text: str, text_lower: str, keywords: list[str]) -> bool:
