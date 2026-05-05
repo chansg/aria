@@ -1,139 +1,206 @@
-# Aria - Autonomous AI Desktop Assistant
+# Project Aria
 
-Aria is a multi-modal AI desktop assistant built in Python for Windows 11. It listens for voice input, routes queries through a tiered reasoning system, analyses desktop screenshots when enabled, tracks local memory, and speaks responses through a configurable local TTS provider.
+Aria is a Windows-first personal AI desktop assistant built to become a reliable, voice-led operating layer for daily work, screen context, memory, and finance research.
 
-The visual model layer has been removed for now. `avatar/renderer.py` is a lightweight placeholder facade that records state and mood cues without depending on an external renderer. This keeps the core pipeline stable while finance, memory, logging, tests, and validation mature.
+The project is intentionally personal and experimental, but the engineering goal is serious: Aria should feel natural to speak with while remaining observable, testable, modular, and governed by human approval at every meaningful decision point.
 
----
+Aria is not being built as an autonomous trading bot, a black-box agent, or a decorative avatar project. The current priority is a stable assistant core: voice, reasoning, screen awareness, structured logs, memory, validation, and a safe paper-trading research environment.
+
+## Intent
+
+Aria is designed around one core principle:
+
+> Aria proposes. Chan decides.
+
+That principle applies across the whole project:
+
+- Aria can listen, reason, search, inspect screen context, and summarize.
+- Aria can store memory and produce structured feedback for later improvement.
+- Aria can analyze financial data and eventually propose paper trades.
+- Aria must not silently self-modify, merge code, execute live trades, or make irreversible decisions without approval.
+
+The long-term direction is a personal AI analyst and desktop co-pilot that can move between conversation, screen understanding, financial research, and validated improvement loops.
+
+## Current Capabilities
+
+| Area | Current state |
+| --- | --- |
+| Voice input | Microphone selection, ambient calibration, silence detection, noise reduction |
+| Speech-to-text | faster-whisper with CPU baseline and CUDA-ready configuration |
+| Voice output | Kokoro ONNX as the primary TTS provider, tuned for low-latency conversation |
+| Conversation mode | Optional always-listening conversation loop |
+| Reasoning router | Three-tier routing for local tasks, web/screen context, and Claude reasoning |
+| Screen awareness | Rolling screenshot capture with Gemini-based vision analysis |
+| Proactive analysis | Opt-in background analyst loop with queued insights |
+| Memory | SQLite-backed episodic and semantic memory foundation |
+| Terminal dashboard | Rich live dashboard for state, latest response, logs, insights, and visual placeholder status |
+| Finance MVP | Stock quote routing, daily market snapshots, compact spoken finance replies |
+| Broker sandbox | Trading 212 demo adapter, currently read-only and demo-only |
+| Validation | Pytest suite plus a validation harness that writes structured session reports |
+
+## What Aria Is Not
+
+Aria is deliberately not the following:
+
+- Not a live-money autonomous trading system.
+- Not a replacement for professional financial advice.
+- Not a self-merging coding agent.
+- Not dependent on an external visual avatar layer.
+- Not allowed to hide failures behind silent fallbacks.
+
+If a subsystem fails, the project should make that failure visible in `logs/aria.log` and in validation output.
 
 ## Architecture
 
 ```text
-Microphone input
-      |
-      v
-voice/listener.py                    # PyAudio capture, silence detection, noise reduction
-      |
-      v
-voice/transcriber.py                 # faster-whisper, CUDA, VAD filtering
-      |
-      v
-core/router.py                       # Intent classification: Tier 1 / 2 / 3
-      |
-      +--> Tier 1                    # Local handlers: time, date, reminders, market update
-      |
-      +--> Tier 2                    # Web + screen context through Gemini, with Ollama fallback
-      |
-      +--> Tier 3                    # Claude API with personality, memory, and scheduler tools
-      |
-      v
-core/brain.py                        # Dispatch, mood-tag parsing, memory persistence
-      |
-      v
-voice/speaker.py                     # TTS facade, sentence splitting, markdown stripping
-      |
-      v
-avatar/renderer.py                   # Local visual placeholder facade
+Microphone
+  |
+  v
+voice/listener.py
+  - PyAudio capture
+  - silence detection
+  - noise reduction
+  |
+  v
+voice/transcriber.py
+  - faster-whisper transcription
+  |
+  v
+core/router.py
+  - Tier 1: local deterministic handlers
+  - Tier 2: web, screen, and Gemini context
+  - Tier 3: Claude reasoning
+  |
+  v
+core/brain.py
+  - intent dispatch
+  - memory writes
+  - response shaping
+  - mood/state cues
+  |
+  v
+voice/speaker.py
+  - Kokoro ONNX synthesis
+  - sentence chunking
+  - playback
+  |
+  v
+core/terminal_ui.py
+  - live dashboard
+  - logs
+  - insight queue
 ```
 
----
+## Reasoning Tiers
 
-## Tier System
+| Tier | Purpose | Examples |
+| --- | --- | --- |
+| Tier 1 | Fast local actions | time, date, reminders, stock quotes, market snapshot, broker account summary |
+| Tier 2 | External context | web search, finance news, current events, weather, screen analysis |
+| Tier 3 | Complex reasoning | planning, explanation, personality-rich conversation, multi-step synthesis |
 
-| Tier | Engine | Query types | Cost |
-|------|--------|-------------|------|
-| 1 | Python stdlib / local modules | Time, date, reminders, market snapshots | Free |
-| 2 | Gemini Flash + DuckDuckGo + screenshot context | Weather, web search, screen analysis | Gemini API |
-| 2 fallback | Ollama / Mistral | Offline Tier 2 when `USE_LOCAL_FALLBACK = True` | Free |
-| 3 | Anthropic Claude API | Personality, memory, complex reasoning | Claude API |
+This structure exists to keep common voice interactions fast and cheap while preserving access to stronger reasoning when needed.
 
----
+## Finance Direction
 
-## Tech Stack
+Aria's finance work is moving in stages.
 
-| Component | Technology | Notes |
-|-----------|------------|-------|
-| Speech-to-text | faster-whisper | CPU `small` default, CUDA-ready when NVIDIA runtime is healthy |
-| Wake word | Whisper keyword spotting | Local, no extra wake-word API |
-| Voice output | Kokoro ONNX | CUDA provider, fail-loud, no silent Piper fallback |
-| Visual layer | Local placeholder facade | No external renderer dependency |
-| Tier 2 reasoning | Google Gemini Flash | Web text + optional screenshot |
-| Tier 2 fallback | Ollama / Mistral | Local offline reasoning |
-| Tier 3 reasoning | Anthropic Claude API | Complex responses and tool use |
-| Market analysis | yfinance + pandas | Daily OHLCV snapshots and anomaly summary |
-| Memory | SQLite | Episodic and semantic memory |
-| Personality | JSON | `data/personality.json` |
-| Scheduler | APScheduler | Reminders and timed events |
-| Web scraping | Playwright + BeautifulSoup | DuckDuckGo HTML endpoint |
-| Screen capture | mss | Full desktop capture with rolling buffer |
-| Terminal UI | rich | Live status and activity dashboard |
+The current finance layer is an assistant-friendly MVP:
 
----
+- Fetch a small set of market prices and daily snapshots.
+- Answer concise spoken stock quote questions.
+- Preserve recent finance context for follow-up questions.
+- Connect to Trading 212 demo in a read-only, audit-friendly way.
 
-## Project Structure
+The intended direction is a safer personal quant research environment:
+
+1. Build a dedicated market data spine.
+2. Store normalized data locally, likely with DuckDB or Parquet.
+3. Add feature generation and regime tagging.
+4. Add backtesting before any execution logic.
+5. Add a trade journal and outcome attribution.
+6. Add risk controls and circuit breakers.
+7. Allow paper-trade proposals in Trading 212 demo only.
+8. Require explicit human approval before any paper order.
+9. Treat live trading as out of scope until the paper system has a long validation record.
+
+Trading 212 demo is a training and execution sandbox, not the source of truth for market history. Historical data, news, filings, and model features should come from a separate data pipeline.
+
+## Roadmap
+
+| Stage | Goal | Status |
+| --- | --- | --- |
+| 1 | Foundation: voice, reasoning, logs, dashboard, screen capture, market MVP | Current |
+| 2 | Self-logging and feedback: structured session reviews and unknown/low-confidence capture | In progress |
+| 3 | Improvement proposals: convert logs and validation output into reviewed GitHub issues | Planned |
+| 4 | Autonomous test and validation: run tests, flag regressions, prepare reviewable PRs | Early foundation |
+| 5 | Adaptive intelligence loop: improve memory, routing, and architecture from real usage | Deferred |
+
+Stage 5 is intentionally deferred. It only becomes credible after Stage 2 and Stage 4 are boringly reliable.
+
+## Safety Model
+
+Aria's safety model is architectural, not cosmetic:
+
+- API keys stay in local configuration or environment variables.
+- `config.py`, runtime data, captures, logs, and private model assets are not intended for public commits.
+- Trading 212 is demo-only in the current code path.
+- Broker operations are read-only until a separate human-gated execution layer exists.
+- Proactive analyst output is queued by default so it does not interrupt conversation.
+- Test and validation output should exist before code is merged.
+- Aria may propose changes, but the user reviews and approves them.
+
+## Repository Layout
 
 ```text
 aria/
-├── main.py
-├── config.py                      # Local secrets - never committed
-├── config.example.py
+├── main.py                         # desktop assistant entry point
+├── config.example.py               # safe configuration template
 ├── requirements.txt
 │
 ├── core/
-│   ├── brain.py                   # Tier dispatch, Gemini/Claude/Ollama handlers
-│   ├── router.py                  # Intent classification
-│   ├── market_analyst.py          # yfinance snapshots + spoken summary
-│   ├── memory.py                  # SQLite episodic + semantic memory
-│   ├── notifications.py           # Stage 3b queued insight store
-│   ├── personality.py             # System prompt builder, interaction tracking
-│   ├── proactive_analyst.py       # Optional Gemini screenshot loop
-│   ├── scheduler.py               # APScheduler reminders
-│   ├── screen_capture.py          # mss desktop capture
-│   ├── terminal_ui.py             # rich dashboard
-│   ├── vision_analyzer.py         # Gemini screenshot analysis
-│   └── web_search.py              # Web search and weather context
+│   ├── brain.py                    # reasoning dispatch and response shaping
+│   ├── router.py                   # intent classification
+│   ├── market_analyst.py           # quote and market snapshot logic
+│   ├── brokers/
+│   │   └── trading212.py           # Trading 212 demo adapter
+│   ├── memory.py                   # SQLite memory layer
+│   ├── notifications.py            # queued proactive insights
+│   ├── proactive_analyst.py        # opt-in background analyst loop
+│   ├── screen_capture.py           # rolling screenshot capture
+│   ├── terminal_ui.py              # Rich terminal dashboard
+│   ├── vision_analyzer.py          # Gemini screen reasoning
+│   └── web_search.py               # web/weather context retrieval
 │
 ├── voice/
-│   ├── listener.py                # Microphone capture
-│   ├── transcriber.py             # faster-whisper
-│   ├── speaker.py                 # TTS facade and playback
-│   ├── tts/                       # Kokoro ONNX and Piper providers
-│   ├── trainer.py                 # Voice calibration
-│   ├── wake.py                    # Wake-word spotting
-│   └── chime.py                   # Wake chime
+│   ├── listener.py                 # microphone capture
+│   ├── transcriber.py              # faster-whisper transcription
+│   ├── speaker.py                  # TTS facade and playback
+│   └── tts/                        # Kokoro and optional Piper providers
 │
 ├── avatar/
-│   ├── renderer.py                # Local placeholder facade
-│   └── animations.py              # Shared state and mood constants
+│   └── renderer.py                 # lightweight visual placeholder facade
 │
-├── tests/
-│   └── test_market_analyst.py
-│
-├── docs/
-│   ├── stage-3b-notifications.md  # Queued insight design
-│   └── voice-runtime.md           # Kokoro CUDA baseline and troubleshooting
-│
-├── data/                          # Runtime data - never commit private files
-├── assets/                        # Local audio/model/sprite assets
-└── tools/
-    ├── benchmark_tts.py           # TTS provider latency benchmark
-    └── generate_sprites.py
+├── docs/                           # architecture notes and generated project docs
+├── tests/                          # pytest coverage
+├── tools/                          # validation and benchmarking tools
+├── assets/                         # local model/audio assets
+└── data/                           # local runtime state, ignored/private
 ```
-
----
 
 ## Setup
 
-### Prerequisites
+### Requirements
 
 - Windows 11
 - Python 3.13
-- NVIDIA GPU recommended for Kokoro CUDA and optional Whisper CUDA
-- Ollama with `mistral` pulled if you want the local Tier 2 fallback
-- Kokoro ONNX full model and voices file for the primary voice
-- Piper voice model is optional; it is not used as a silent fallback by default
+- PowerShell 7 recommended
+- NVIDIA GPU recommended for Kokoro ONNX CUDA
+- Anthropic API key for Tier 3 reasoning
+- Gemini API key for Tier 2 web/screen reasoning
+- Trading 212 demo API key only if testing the broker sandbox
 
-### Installation
+### Install
 
 ```powershell
 git clone https://github.com/chansg/aria.git
@@ -142,25 +209,26 @@ cd aria
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 playwright install chromium
 ```
 
-### Configuration
+### Configure
 
 ```powershell
 Copy-Item config.example.py config.py
 ```
 
-Required or commonly edited settings:
+Then edit `config.py` locally. Do not commit real API keys.
+
+Important settings:
 
 ```python
 ANTHROPIC_API_KEY = "..."
 GEMINI_API_KEY = "..."
 
-SCREEN_CAPTURE_ENABLED = True
-SCREEN_CAPTURE_INTERVAL = 5.0
 USE_LOCAL_FALLBACK = False
+SCREEN_CAPTURE_ENABLED = True
 CONVERSATION_MODE_DEFAULT = True
 
 TTS_PROVIDER = "kokoro"
@@ -168,19 +236,8 @@ TTS_CONVERSATION_PROVIDER = "kokoro"
 TTS_FALLBACK_PROVIDER = ""
 TTS_FAIL_LOUD = True
 
-KOKORO_ONNX_MODEL_PATH = "assets/voices/kokoro/kokoro-v1.0.onnx"
-KOKORO_ONNX_VOICES_PATH = "assets/voices/kokoro/voices-v1.0.bin"
-KOKORO_ONNX_PROVIDER = "CUDAExecutionProvider"
-KOKORO_DISABLE_PROVIDER_FALLBACK = True
-KOKORO_VOICE = "af_heart"
-KOKORO_LANG = "en-us"
-KOKORO_SPEED = 1.0
-
-PROACTIVE_ANALYST_SPEAK_INSIGHTS = False
-
-MARKET_TICKERS = ["AAPL", "MSFT", "NVDA", "TSLA"]
-MARKET_VOLUME_SPIKE_PCT = 30.0
-MARKET_VOLATILITY_SIGMA = 2.0
+TRADING212_ENV = "demo"
+TRADING212_BASE_URL = "https://demo.trading212.com/api/v0"
 ```
 
 ### Run
@@ -189,138 +246,53 @@ MARKET_VOLATILITY_SIGMA = 2.0
 python main.py
 ```
 
-On first run:
+On startup, Aria will ask for a microphone, calibrate ambient noise, initialize memory, start screen capture if enabled, and open the Rich terminal dashboard.
 
-1. Select a microphone from the numbered list.
-2. Stay quiet while ambient noise is calibrated.
-3. Choose whether to run voice calibration.
-4. Use the rich terminal dashboard to monitor state, logs, and responses.
+## Validation
 
----
-
-## Voice Runtime Baseline
-
-Aria's stable voice baseline is Kokoro ONNX on the NVIDIA CUDA execution provider.
-The full `kokoro-v1.0.onnx` model is used for GPU inference. The int8 model is
-kept only as a CPU-oriented asset because it is slower and less reliable on the
-RTX 4070 CUDA path.
-
-Conversation speech should log `provider=kokoro-onnx` and
-`CUDAExecutionProvider`. Piper is retained as an optional provider but is not a
-silent fallback in the default configuration. If Kokoro fails, Aria should fail
-loudly in `logs/aria.log` so the runtime issue is visible.
-
-Benchmark the current TTS path with:
+Run the test suite:
 
 ```powershell
-python tools\benchmark_tts.py --provider kokoro
+python -m pytest -q
 ```
 
-Expected warm synthesis on the RTX 4070 is roughly half a second for short
-conversation replies after the model has loaded. See
-[`docs/voice-runtime.md`](docs/voice-runtime.md) for the full checklist and
-troubleshooting notes.
+Run the validation harness:
 
----
+```powershell
+python tools\run_validation.py
+```
 
-## Market Analyst
-
-The market analyst MVP adds a Tier 1 voice intent:
+Validation reports are written to:
 
 ```text
-Aria, market update
-Aria, full market update
+data/session_reviews/
 ```
 
-It fetches recent OHLCV data with yfinance, computes moving averages, daily change, 30-day volatility, volume deviation, and crossover signals, then writes a structured snapshot to:
+These reports are intended to become part of Aria's feedback loop: logs and validation data should drive issues, fixes, and later improvement proposals.
 
-```text
-data/market/YYYY-MM-DD.json
-```
+## Operating Principles
 
-The spoken summary is intentionally short by default. Full mode gives one sentence per configured ticker.
+Development should follow these constraints:
 
----
+- Prefer small reviewed changes over broad speculative refactors.
+- Keep runtime failures visible in logs.
+- Add tests for every bug discovered through manual voice sessions.
+- Do not expand finance execution before backtesting, journaling, and risk controls exist.
+- Do not let the assistant self-modify or merge unreviewed changes.
+- Keep the voice experience fast enough to feel conversational.
 
-## Conversation Mode
+## Current Focus
 
-| Mode | Behaviour | How to toggle |
-|------|-----------|---------------|
-| ON | Aria responds to all speech | Say "Aria, conversation mode off" |
-| OFF | Aria only responds when addressed | Say "Aria, conversation mode on" |
+The near-term focus is:
 
----
+1. Improve screen-aware routing so natural phrases like "on my screen" trigger vision.
+2. Improve finance/current-event routing so market news goes through Tier 2 context.
+3. Make `aria.log` and validation reports useful for debugging by humans and AI tools.
+4. Keep Kokoro TTS fast and reliable without silent fallback.
+5. Build the paper-trading research foundation without introducing live-trading risk.
 
-## Stage 3b Notifications
+## Project Status
 
-When analysis mode is enabled, proactive analyst insights are queued instead of
-spoken by default. This protects live conversation from interruption while still
-preserving useful observations.
+Aria is active, experimental, and under rapid iteration. The codebase should be treated as a personal research system, not production software.
 
-Useful voice commands:
-
-```text
-Aria, what did you notice?
-Aria, show queued insights
-Aria, mark insights read
-Aria, clear notifications
-```
-
-Unread insight count and the latest unread insight appear in the terminal
-dashboard. The queue is stored at `data/notifications.jsonl`.
-
----
-
-## Phase Status
-
-| Phase | Feature | Status |
-|-------|---------|--------|
-| 1 | Voice pipeline - Whisper, VAD, noisereduce | Complete |
-| 2 | Claude brain + SQLite memory | Complete |
-| 3 | TTS provider facade - Kokoro ONNX CUDA, fail-loud runtime | Complete |
-| 4 | Web scraping - DuckDuckGo + Playwright | Complete |
-| 5 | External visual model layer | Removed |
-| 6 | Speech accuracy - Whisper prompts and calibration | Complete |
-| 7 | Intent router - three-tier keyword classification | Complete |
-| 8 | Screen capture - mss rolling buffer | Complete |
-| 9 | Gemini vision - screen analysis on demand | Complete |
-| 10 | Conversation mode toggle | Complete |
-| 11 | Gemini unified Tier 2 - web + screen context | Complete |
-| 12 | Stage 3a - Proactive Analyst Loop | Complete |
-| 13 | Structured logging - `logs/aria.log` rotation | Complete |
-| 14 | Rich terminal dashboard | Complete |
-| 15 | Market analyst MVP - daily snapshots + spoken summary | Complete |
-| 16 | Stage 3b - notification state + queued insights | In progress |
-| 17 | Stage 3c - finance specialisation, sentiment, news, filings | Planned |
-| 18 | Memory upgrade - semantic search | Planned |
-
----
-
-## Placeholder Recommendation
-
-The current placeholder is deliberately the simplest option: a terminal-visible state facade. It is cheap to maintain, testable, and keeps the application focused on finance and reliability.
-
-For the next quick visual step, prefer a tiny local tray/window or rich-dashboard panel that shows:
-
-- state: listening / thinking / speaking / idle
-- last mood tag
-- latest market snapshot status
-- queued proactive insight count
-
-That gives immediate feedback without reintroducing a heavy external rendering dependency.
-
----
-
-## Known Issues / Deferred
-
-| Issue | Reason | Resolution |
-|-------|--------|------------|
-| Rich UI unavailable | Optional dependency may be missing | App falls back to plain terminal output |
-| Weather via search snippets | Search pages can return partial context | Prefer structured sources in future finance work |
-| Advanced visual model | Not core to finance assistant reliability | Revisit after Stage 3b/3c validation |
-
----
-
-## Author
-
-Chanveer Grewal - [github.com/chansg](https://github.com/chansg)
+The target is not theatrical autonomy. The target is a dependable assistant that earns more responsibility through logs, tests, validation, and explicit human approval.
