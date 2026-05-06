@@ -242,28 +242,76 @@ def _trigger_avatar_mood(mood: str) -> None:
         pass  # Visual layer unavailable — continue silently
 
 
-def _ensure_complete_sentence(text: str) -> str:
-    """Append a period if a Tier 2 response ends mid-word.
+class IncompleteModelResponseError(ValueError):
+    """Raised when a model response is too incomplete to speak safely."""
 
-    Gemini occasionally returns truncated responses (slow API, content
-    filter mid-stream, partial stream). This guard catches the most
-    obvious case — text ending with no sentence-ending punctuation —
-    and appends a period so TTS doesn't speak a dangling fragment.
 
-    Does not fix the upstream Gemini truncation, just sands off the
-    rough edge so Aria sounds intentional rather than glitchy.
+_INCOMPLETE_TAIL_WORDS = {
+    "a", "an", "and", "are", "as", "at", "because", "but", "by", "for",
+    "from", "if", "in", "including", "into", "of", "on", "or", "so",
+    "that", "the", "to", "using", "via", "with",
+}
 
-    Args:
-        text: Cleaned response text (mood tag already stripped).
+_INCOMPLETE_TAIL_PATTERNS = (
+    r"\baccess to external$",
+    r"\bcapitalization for$",
+    r"\bmarket cap(?:italization)? of$",
+    r"\bcould(?:n't| not) find\b.+\bfor$",
+    r"\busing only the web information$",
+)
 
-    Returns:
-        Text guaranteed to end with sentence-closing punctuation.
+_DEFAULT_INCOMPLETE_RESPONSE = (
+    "I got an incomplete response back, Chan. Ask me to check that again "
+    "and I'll rerun it."
+)
+
+
+def _looks_incomplete_response(text: str) -> bool:
+    """Return True when a model response appears truncated mid-thought."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if stripped[-1] in ".!?":
+        return False
+
+    lowered = stripped.lower().rstrip(",;:")
+    if any(re.search(pattern, lowered) for pattern in _INCOMPLETE_TAIL_PATTERNS):
+        return True
+
+    words = re.findall(r"[a-zA-Z']+", lowered)
+    return bool(words and words[-1] in _INCOMPLETE_TAIL_WORDS)
+
+
+def _ensure_complete_sentence(
+    text: str,
+    *,
+    source: str = "model",
+    strict: bool = False,
+    fallback_message: str = _DEFAULT_INCOMPLETE_RESPONSE,
+) -> str:
+    """Return speakable text, rejecting obviously incomplete model output.
+
+    Missing final punctuation is acceptable when the response otherwise looks
+    complete; Aria can append a period. Dangling fragments such as
+    "access to external" or "market capitalization for" are not acceptable
+    because they sound like runtime failures when spoken aloud.
     """
     if not text:
         return text
     text = text.rstrip()
     if text and text[-1] not in ".!?":
-        log.warning("Response ends mid-word — appending '.' to ...%r", text[-20:])
+        if _looks_incomplete_response(text):
+            log.warning(
+                "%s response rejected as incomplete: ...%r",
+                source,
+                text[-80:],
+            )
+            if strict:
+                raise IncompleteModelResponseError(
+                    f"{source} response appears incomplete"
+                )
+            return fallback_message
+        log.info("%s response missing final punctuation; appending period.", source)
         text += "."
     return text
 
@@ -671,11 +719,17 @@ def _handle_web_query(text: str, intent: str = "") -> str:
         )
         log.info("Gemini Tier 2 response — %d chars.", len(raw))
         mood, clean_response = _parse_mood_tag(raw)
-        clean_response = _ensure_complete_sentence(clean_response)
+        clean_response = _ensure_complete_sentence(
+            clean_response,
+            source="Gemini Tier 2",
+            strict=True,
+        )
         clean_response = _limit_spoken_response(clean_response, text)
         _trigger_avatar_mood(mood)
         return clean_response
 
+    except IncompleteModelResponseError as e:
+        log.warning("Gemini response failed quality gate (%s) — falling back to Ollama.", e)
     except Exception as e:
         log.warning("Gemini failed (%s) — falling back to Ollama.", e)
 
@@ -714,7 +768,14 @@ def _handle_vision(text: str) -> str:
     analyzer = _get_vision_analyzer()
     raw = analyzer.analyse_screen(context=text)
     mood, clean_response = _parse_mood_tag(raw)
-    clean_response = _ensure_complete_sentence(clean_response)
+    clean_response = _ensure_complete_sentence(
+        clean_response,
+        source="Gemini vision",
+        fallback_message=(
+            "I can see your screen, Chan, but my visual read came back "
+            "incomplete. Ask me to look again and I'll rerun it."
+        ),
+    )
     clean_response = _limit_spoken_response(clean_response, text)
     _trigger_avatar_mood(mood)
     return clean_response
@@ -801,7 +862,14 @@ def _handle_ollama_fallback(text: str, web_context: str = "") -> str:
         raw = _query_ollama(prompt)
         log.info("Ollama fallback response — %d chars.", len(raw))
         mood, clean_response = _parse_mood_tag(raw)
-        clean_response = _ensure_complete_sentence(clean_response)
+        clean_response = _ensure_complete_sentence(
+            clean_response,
+            source="Ollama fallback",
+            fallback_message=(
+                "I found some web context, Chan, but the generated answer "
+                "came back incomplete. Ask me to check again and I'll rerun it."
+            ),
+        )
         clean_response = _limit_spoken_response(clean_response, text)
         _trigger_avatar_mood(mood)
         return clean_response
