@@ -6,6 +6,8 @@ Voice response length policy tests.
 
 from __future__ import annotations
 
+import pytest
+
 import core.brain as brain
 
 
@@ -39,3 +41,31 @@ def test_voice_policy_trims_long_single_sentence(monkeypatch) -> None:
 
     assert out.endswith(".")
     assert len(out) <= 45
+
+
+def test_complete_sentence_guard_appends_safe_missing_period() -> None:
+    out = brain._ensure_complete_sentence(
+        "Hey Chan, you've got your project notes",
+        source="test",
+    )
+
+    assert out == "Hey Chan, you've got your project notes."
+
+
+def test_complete_sentence_guard_rejects_truncated_external_access() -> None:
+    with pytest.raises(brain.IncompleteModelResponseError):
+        brain._ensure_complete_sentence(
+            "Chan, I still don't have access to external",
+            source="test",
+            strict=True,
+        )
+
+
+def test_complete_sentence_guard_uses_fallback_when_not_strict() -> None:
+    out = brain._ensure_complete_sentence(
+        "Chan, I couldn't find the market capitalization for",
+        source="test",
+        fallback_message="Fallback response.",
+    )
+
+    assert out == "Fallback response."

@@ -51,6 +51,12 @@ _CONVERSATIONAL_PREFIXES = (
     "search for ", "look up ", "find out ",
 )
 
+_CORRECTION_PREFIX_PATTERNS = (
+    r"^(?:no|nope|nah)[,\s]+",
+    r"^(?:actually|sorry|correction)[,\s]+",
+    r"^(?:i meant|i mean|what i meant was|what i mean is)[,\s]+",
+)
+
 # Common Whisper mishear corrections for command words.
 # Multi-word patterns ensure we only correct in command contexts —
 # bare "such" stays untouched ("such a good day" should not be modified),
@@ -89,17 +95,26 @@ def clean_query(raw: str) -> str:
     """
     text = raw.lower().strip().rstrip("?.,!")
 
-    # Strip Aria name variants from start
-    for prefix in sorted(_ARIA_PREFIXES, key=len, reverse=True):
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip().lstrip(",").strip()
-            break
-
-    # Strip conversational prefixes — loop to catch chained filler
-    # e.g. "can you look up" → strip "can you " → strip "look up "
+    # Strip Aria name variants, corrections, and conversational prefixes.
+    # Loop to catch chained filler, e.g. "Aria, no, can you look up...".
     changed = True
     while changed:
         changed = False
+        for prefix in sorted(_ARIA_PREFIXES, key=len, reverse=True):
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip().lstrip(",").strip()
+                changed = True
+                break
+        if changed:
+            continue
+        for pattern in _CORRECTION_PREFIX_PATTERNS:
+            new_text = re.sub(pattern, "", text).strip()
+            if new_text != text:
+                text = new_text
+                changed = True
+                break
+        if changed:
+            continue
         for prefix in _CONVERSATIONAL_PREFIXES:
             if text.startswith(prefix):
                 text = text[len(prefix):].strip()
@@ -115,6 +130,22 @@ def clean_query(raw: str) -> str:
     result = text.strip().rstrip("?.,!")
     log.info("Cleaned query: %r -> %r", raw[:50], result)
     return result
+
+
+def _snippet_count(result: str) -> int:
+    """Count non-empty web context lines for diagnostics."""
+    return sum(1 for line in result.splitlines() if line.strip())
+
+
+def _log_web_context(query: str, result: str, *, source: str) -> None:
+    """Log web context size without dumping snippet content."""
+    log.info(
+        "Web context ready: source=%s query=%r chars=%d snippets=%d",
+        source,
+        query[:80],
+        len(result),
+        _snippet_count(result),
+    )
 
 
 # ── Weather: wttr.in handler ──────────────────────────────────────────
@@ -230,7 +261,9 @@ def search_web(query: str) -> str:
     # Return cached result if still valid
     if cache_key in cache and _is_cache_valid(cache[cache_key]):
         log.info("Returning cached result for: %s", query[:50])
-        return cache[cache_key]["result"]
+        result = cache[cache_key]["result"]
+        _log_web_context(query, result, source="cache")
+        return result
 
     # Weather queries → wttr.in for structured data
     is_weather = any(kw in query.lower() for kw in _WEATHER_KEYWORDS)
@@ -254,6 +287,8 @@ def search_web(query: str) -> str:
 
     if not result or not result.strip():
         return "I searched but didn't find any relevant results, Chan."
+
+    _log_web_context(query, result, source="fetch")
 
     # Cache the result
     cache[cache_key] = {
